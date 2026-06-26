@@ -38,19 +38,129 @@ function roundRectPath(g, x, y, w, h, r) {
 const map        = [];
 const seed       = [];
 const decorations = [];
+const palmOnSand = {};  // "c,r" → true for palms whose ground should render as sand
 
 const chests = [
   { col: 12, row: 20, open: false, type: 'normal' },
   { col: 38, row: 10, open: false, type: 'normal' },
-  { col: 22, row: 42, open: false, type: 'normal' },
+  { col: 20, row: 38, open: false, type: 'normal' }, // centre of the pond at (20,38) — reach it via the magic bridge
 ];
 const chestMap = {};
 for (const ch of chests) chestMap[`${ch.col},${ch.row}`] = ch;
 
-const inventory  = { gold: 0, diamond: 0, redflower: 0, apple: 0 };
+const inventory  = {
+  // currency & loot
+  gold: 0, diamond: 0, redflower: 0, apple: 0, coconut: 0,
+  // raw ingredients (shop)
+  cabbage: 0, tomato: 0, egg: 0, rice: 0, flour: 0,
+  salt: 0, sugar: 0, pepper: 0, meat: 0,
+  // cooked dishes (15 total)
+  scrambledEgg: 0, candiedApple: 0, steamedRice: 0,
+  tomatoNoodles: 0, tomatoEggRice: 0,
+  friedEgg: 0, eggFriedRice: 0,
+  friedCabbage: 0, pepperCabbage: 0, cabbagePork: 0,
+  redBraisedPork: 0, friedPork: 0, mincedMeatRice: 0,
+  tomatoSoup: 0, sweetPancake: 0,
+  // materials (from chopping trees)
+  lumber: 0, pinecone: 0,
+};
 let   lootMessage = null; // { text, timer }
+let   shopOpen    = false;
+let   cookOpen    = false;
+let   bagOpen     = false;
 
-const digSpot = { col: Math.floor(64 / 2), row: 35, dug: false, chestOpen: false };
+// ── Tree chopping ─────────────────────────────────────────────────────────────
+const CHOP_HITS   = 4;
+const treeHits    = {};          // "col,row" → hit count
+const fallenTrees = [];          // { col, row, lumber, pinecones }
+let   shakingTree = null;        // { col, row, type, timer } — active shake animation
+const TREE_TILE_TYPES = new Set([T.TREE, T.PINE, T.PALM, T.CHERRY, T.APPLE]);
+
+// ── Shop ──────────────────────────────────────────────────────────────────────
+const SHOP_COL = 40, SHOP_ROW = 28;
+const SHOP_ITEMS = [
+  { key: 'cabbage', icon: '🥬', price: 2 },
+  { key: 'tomato',  icon: '🍅', price: 2 },
+  { key: 'egg',     icon: '🥚', price: 2 },
+  { key: 'rice',    icon: '🍚', price: 2 },
+  { key: 'flour',   icon: '🌾', price: 2 },
+  { key: 'salt',    icon: '🧂', price: 2 },
+  { key: 'sugar',   icon: '🍬', price: 2 },
+  { key: 'pepper',  icon: '🌶️', price: 2 },
+  { key: 'meat',    icon: '🥩', price: 2 },
+];
+
+// ── Stove ─────────────────────────────────────────────────────────────────────
+const STOVE_COL = 44, STOVE_ROW = 30;
+
+// ── Building protection ────────────────────────────────────────────────────────
+// Add every building tile here. Admin mode can never paint over these tiles.
+// Call protectBuilding() for any new building added in the future.
+const BUILDING_TILES = new Set();
+function protectBuilding(col, row) { BUILDING_TILES.add(`${col},${row}`); }
+protectBuilding(SHOP_COL,  SHOP_ROW);
+protectBuilding(STOVE_COL, STOVE_ROW);
+
+// ── Recipes (15 dishes) ───────────────────────────────────────────────────────
+const RECIPES = [
+  { key: 'scrambledEgg',  icon: '🍳', needs: { tomato:1, egg:1, salt:1, sugar:1 } },
+  { key: 'candiedApple',  icon: '🍯', needs: { apple:1, sugar:1 } },
+  { key: 'steamedRice',   icon: '🥣', needs: { rice:1 } },
+  { key: 'tomatoNoodles', icon: '🍜', needs: { tomato:1, egg:1, salt:1, sugar:1, flour:1 } },
+  { key: 'tomatoEggRice', icon: '🥘', needs: { tomato:1, egg:1, salt:1, sugar:1, cabbage:1, rice:1 } },
+  { key: 'friedEgg',      icon: '🍳', needs: { egg:1, salt:1 } },
+  { key: 'eggFriedRice',  icon: '🍚', needs: { egg:1, rice:1, salt:1 } },
+  { key: 'friedCabbage',  icon: '🫑', needs: { cabbage:1, salt:1 } },
+  { key: 'pepperCabbage', icon: '🌿', needs: { cabbage:1, salt:1, pepper:1 } },
+  { key: 'cabbagePork',   icon: '🥗', needs: { cabbage:1, meat:1, salt:1 } },
+  { key: 'redBraisedPork',icon: '🍖', needs: { meat:1, sugar:1, salt:1 } },
+  { key: 'friedPork',     icon: '🥓', needs: { meat:1, salt:1, pepper:1 } },
+  { key: 'mincedMeatRice',icon: '🍱', needs: { meat:1, rice:1, salt:1 } },
+  { key: 'tomatoSoup',    icon: '🍵', needs: { tomato:1, salt:1 } },
+  { key: 'sweetPancake',  icon: '🥞', needs: { flour:1, sugar:1 } },
+];
+
+// All inventory item metadata (for HUD + admin editor)
+const INVENTORY_META = [
+  // currency & loot
+  { key: 'gold',      icon: '💰' }, { key: 'diamond',  icon: '💎' },
+  { key: 'redflower', icon: '🌸' }, { key: 'apple',    icon: '🍎' },
+  { key: 'coconut',   icon: '🥥' },
+  // raw ingredients
+  { key: 'cabbage', icon: '🥬' }, { key: 'tomato', icon: '🍅' },
+  { key: 'egg',     icon: '🥚' }, { key: 'rice',   icon: '🍚' },
+  { key: 'flour',   icon: '🌾' }, { key: 'salt',   icon: '🧂' },
+  { key: 'sugar',   icon: '🍬' }, { key: 'pepper', icon: '🌶️' },
+  { key: 'meat',    icon: '🥩' },
+  // cooked dishes (inherit icon from RECIPES)
+  ...RECIPES.map(r => ({ key: r.key, icon: r.icon })),
+  // materials
+  { key: 'lumber',   icon: '🪵' },
+  { key: 'pinecone', icon: '🌰' },
+];
+
+// ── Backpack categories ───────────────────────────────────────────────────────
+// apple goes in Ingredients even though it is also a cooking ingredient for dishes
+const BAG_INGREDIENT_KEYS = [
+  'redflower', 'apple', 'coconut',
+  'cabbage', 'tomato', 'egg', 'rice', 'flour',
+  'salt', 'sugar', 'pepper', 'meat',
+];
+const BAG_FOOD_KEYS     = RECIPES.map(r => r.key);
+const BAG_MATERIAL_KEYS = ['lumber', 'pinecone'];
+
+// ── Dig spots: a buried chest. Stand nearby, press F to dig, press F again to open.
+const digSpots   = [];
+const digSpotMap = {};
+function makeDigSpot(c, r, chestType, flower) {
+  const ds = { col: c, row: r, dug: false, chestOpen: false, chestType, flower: flower || null };
+  digSpots.push(ds);
+  digSpotMap[`${c},${r}`] = ds;
+  return ds;
+}
+function isDigSpotTile(c, r) { return !!digSpotMap[`${c},${r}`]; }
+makeDigSpot(Math.floor(64 / 2), 35, 'fancy', null);     // centre
+makeDigSpot(3, 3, 'splendid', 'emerald');               // top-left, marked by an emerald flower
 
 // ── Ponds ────────────────────────────────────────────────────────────────────
 const ponds = [
@@ -146,83 +256,57 @@ function buildMap() {
     seed[r][c] = Math.floor(rng(c, r, 3) * 5);
   }
 
-  // Tree clusters (deciduous)
-  const treeClusters = [
-    { cx: 5,  cy: 5,  n: 14 },
-    { cx: 55, cy: 5,  n: 14 },
-    { cx: 5,  cy: 55, n: 12 },
-    { cx: 58, cy: 55, n: 12 },
-    { cx: 18, cy: 12, n: 10 },
-    { cx: 48, cy: 12, n: 10 },
-    { cx: 8,  cy: 45, n: 10 },
-    { cx: 55, cy: 40, n: 10 },
-    { cx: 40, cy: 50, n: 12 },
-    { cx: 28, cy: 55, n: 8  },
-  ];
-  for (const cl of treeClusters) {
-    for (let i = 0; i < cl.n; i++) {
-      const angle = rng(i, cl.cx, cl.cy) * Math.PI * 2;
-      const dist  = rng(i, cl.cy, cl.cx) * 5;
-      const c = Math.round(cl.cx + Math.cos(angle) * dist);
-      const r = Math.round(cl.cy + Math.sin(angle) * dist);
-      if (rng(i, cl.cx + 7, cl.cy + 13) < 0.5) continue; // thin out ~half the round trees
-      if (r >= 0 && r < ROWS && c >= 0 && c < COLS && map[r][c] === T.GRASS)
-        map[r][c] = T.TREE;
-    }
-  }
-
-  // Pine clusters (northern)
-  const pineClusters = [
-    { cx: 12, cy: 25, n: 8 },
-    { cx: 50, cy: 25, n: 8 },
-    { cx: 6,  cy: 18, n: 6 },
-    { cx: 58, cy: 18, n: 6 },
-  ];
-  for (const cl of pineClusters) {
-    for (let i = 0; i < cl.n; i++) {
-      const angle = rng(i + 100, cl.cx, cl.cy) * Math.PI * 2;
-      const dist  = rng(i + 100, cl.cy, cl.cx) * 4;
-      const c = Math.round(cl.cx + Math.cos(angle) * dist);
-      const r = Math.round(cl.cy + Math.sin(angle) * dist);
-      if (r >= 0 && r < ROWS && c >= 0 && c < COLS && map[r][c] === T.GRASS)
-        map[r][c] = T.PINE;
-    }
-  }
-
-  // Palm trees near sandy shores
+  // Trees: random scatter of all kinds across the whole map.
+  // One object per tile is guaranteed — we only place on empty grass and skip
+  // any tile already claimed by a chest, the monument, or the dig spot.
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       if (map[r][c] !== T.GRASS) continue;
-      // Check if near sand
-      let nearSand = false;
-      for (const [dr, dc] of ortho) {
-        const nr = r + dr, nc = c + dc;
-        if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS && map[nr][nc] === T.SAND) {
-          nearSand = true; break;
+      if (chestMap[`${c},${r}`])             continue;
+      if (monumentBlocked[`${c},${r}`])      continue;
+      if (isDigSpotTile(c, r)) continue;
+      if (c === SHOP_COL  && r === SHOP_ROW)  continue;
+      if (c === STOVE_COL && r === STOVE_ROW) continue;
+      if (rng(c, r, 31) >= 0.06) continue; // ~6% of grass tiles become a tree
+      const tv = rng(c, r, 53);
+      const half = rng(c, r, 71) < 0.5; // used to thin round & pine trees by half
+      if      (tv < 0.45) { if (half) continue; map[r][c] = T.TREE; } // round (halved)
+      else if (tv < 0.65) { if (half) continue; map[r][c] = T.PINE; } // pine  (halved)
+      else if (tv < 0.80) {
+        // palms only grow next to a sandy bay
+        let nearSand = false;
+        for (const [dr, dc] of ortho) {
+          const nr = r + dr, nc = c + dc;
+          if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS && map[nr][nc] === T.SAND) {
+            nearSand = true; break;
+          }
         }
+        if (nearSand) map[r][c] = T.PALM;
       }
-      if (nearSand && rng(c, r, 77) < 0.18) map[r][c] = T.PALM;
+      else if (tv < 0.90) map[r][c] = T.APPLE;
+      else                map[r][c] = T.CHERRY;
     }
   }
 
-  // Cherry blossom trees (random scatter across map)
+  // A few palms growing right on the sandy bay (ground stays sand under them)
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
-      if (map[r][c] !== T.GRASS) continue;
-      if (rng(c, r, 88) < 0.005) map[r][c] = T.CHERRY;
-    }
-  }
-
-  // Convert 20% of deciduous trees to apple trees
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) {
-      if (map[r][c] === T.TREE && rng(c, r, 66) < 0.2) map[r][c] = T.APPLE;
+      if (map[r][c] !== T.SAND) continue;
+      if (isDigSpotTile(c, r)) continue;
+      if (rng(c, r, 83) < 0.12) {
+        map[r][c] = T.PALM;
+        palmOnSand[`${c},${r}`] = true;
+      }
     }
   }
 
   // Keep chest tiles clear
+  // Clear only trees from under chests (a chest may deliberately sit on water,
+  // e.g. one placed in the centre of a pond, so don't wipe water/sand).
   for (const ch of chests) {
-    if (map[ch.row][ch.col] !== T.GRASS) map[ch.row][ch.col] = T.GRASS;
+    const ct = map[ch.row][ch.col];
+    if (ct === T.TREE || ct === T.PINE || ct === T.PALM || ct === T.CHERRY || ct === T.APPLE)
+      map[ch.row][ch.col] = T.GRASS;
   }
 
   // Keep monument plinth clear
@@ -231,16 +315,24 @@ function buildMap() {
     map[r][c] = T.GRASS;
   }
 
-  // Scatter flowers and sunflowers on grass
+  // Scatter flowers and sunflowers on empty grass only (one object per tile)
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       if (map[r][c] !== T.GRASS) continue;
-      if (chestMap[`${c},${r}`])       continue;
+      if (chestMap[`${c},${r}`])        continue;
       if (monumentBlocked[`${c},${r}`]) continue;
+      if (isDigSpotTile(c, r))          continue;
+      if (c === SHOP_COL  && r === SHOP_ROW)  continue;
+      if (c === STOVE_COL && r === STOVE_ROW) continue;
       const v = rng(c, r, 42);
       if      (v < 0.015) decorations.push({ col: c, row: r, type: 'sunflower' });
       else if (v < 0.09)  decorations.push({ col: c, row: r, type: 'flower' });
     }
+  }
+
+  // Emerald flower markers over flower-marked dig spots (e.g. the top-left one)
+  for (const ds of digSpots) {
+    if (ds.flower) decorations.push({ col: ds.col, row: ds.row, type: ds.flower });
   }
 
   // Initialise bridge tiles for each pond
@@ -285,15 +377,38 @@ for (let r = 0; r < ROWS; r++) {
   }
 }
 
+// ── Palm tree data (some carry pickable coconuts) ─────────────────────────────
+const palmTrees = [];
+const palmTreeMap = {};
+function makePalmTree(c, r) {
+  // ~40% of palms bear 1–3 coconuts
+  const coconuts = rng(c, r, 44) < 0.4 ? Math.floor(rng(c, r, 45) * 3) + 1 : 0;
+  const pt = { col: c, row: r, coconuts };
+  palmTrees.push(pt);
+  palmTreeMap[`${c},${r}`] = pt;
+  return pt;
+}
+for (let r = 0; r < ROWS; r++) {
+  for (let c = 0; c < COLS; c++) {
+    if (map[r][c] === T.PALM) makePalmTree(c, r);
+  }
+}
+
 // ── Map editor: persistent layered tile edits (admin mode) ────────────────────
 // Each edited tile is stored as { t: terrainBrush, o?: objectBrush } so an object
 // (chest / flower) can sit on top of any terrain (e.g. a chest on dirt) and both
 // survive across sessions. Edits are re-applied over the procedural map on load.
 const TERRAIN_BRUSHES = ['grass', 'dirt', 'sand', 'water', 'tree', 'pine', 'palm', 'cherry', 'apple'];
-const OBJECT_BRUSHES  = ['flower', 'sunflower', 'chest', 'chestFancy', 'chestPrecious', 'chestSplendid'];
+const OBJECT_BRUSHES  = ['flower', 'sunflower',
+  'chest', 'chestFancy', 'chestPrecious', 'chestSplendid',
+  'digChest', 'digFancy', 'digPrecious', 'digSplendid'];
 const TREE_BRUSHES    = ['tree', 'pine', 'palm', 'cherry', 'apple'];
 const CHEST_BRUSH_TYPE = {
   chest: 'normal', chestFancy: 'fancy', chestPrecious: 'precious', chestSplendid: 'splendid',
+};
+// Buried-chest (dig spot) brushes → chest type
+const DIG_BRUSH_TYPE = {
+  digChest: 'normal', digFancy: 'fancy', digPrecious: 'precious', digSplendid: 'splendid',
 };
 
 let mapEdits = {};
@@ -330,10 +445,18 @@ function removeTileObjects(c, r) {
   if (appleTreeMap[k]) delete appleTreeMap[k];
   const ci = cherryTrees.findIndex(a => a.col === c && a.row === r);
   if (ci >= 0) cherryTrees.splice(ci, 1);
+  const pi = palmTrees.findIndex(a => a.col === c && a.row === r);
+  if (pi >= 0) palmTrees.splice(pi, 1);
+  if (palmTreeMap[k]) delete palmTreeMap[k];
+  delete palmOnSand[k];
   for (let i = decorations.length - 1; i >= 0; i--) {
     if (decorations[i].col === c && decorations[i].row === r) decorations.splice(i, 1);
   }
-  if (digSpot.col === c && digSpot.row === r) digSpot.removed = true;
+  if (digSpotMap[k]) {
+    const di = digSpots.indexOf(digSpotMap[k]);
+    if (di >= 0) digSpots.splice(di, 1);
+    delete digSpotMap[k];
+  }
 }
 
 function setTerrain(c, r, terr) {
@@ -343,7 +466,7 @@ function setTerrain(c, r, terr) {
     case 'water': map[r][c] = T.WATER; break;
     case 'tree':  map[r][c] = T.TREE;  break;
     case 'pine':  map[r][c] = T.PINE;  break;
-    case 'palm':  map[r][c] = T.PALM;  break;
+    case 'palm':  map[r][c] = T.PALM;  makePalmTree(c, r); break;
     case 'cherry':
       map[r][c] = T.CHERRY;
       cherryTrees.push({ col: c, row: r, flowers: 3 });
@@ -366,6 +489,8 @@ function addObject(c, r, o) {
     const ch = { col: c, row: r, open: false, type: CHEST_BRUSH_TYPE[o] };
     chests.push(ch);
     chestMap[`${c},${r}`] = ch;
+  } else if (DIG_BRUSH_TYPE[o]) {
+    makeDigSpot(c, r, DIG_BRUSH_TYPE[o], null); // buried chest, dig to reveal
   }
 }
 
@@ -446,20 +571,45 @@ const I18N = {
     namePlaceholder: '输入名字',
     pressOpen: '按 F 开启', pressDig: '按 F 挖掘',
     pressOpenFancy: '按 F 开启精致宝箱', pressPickApple: '按 F 摘苹果',
-    pressPickCherry: '按 F 摘樱花', selectHint: '滚轮/方向键选择 · F 或点击确认',
+    pressPickCherry: '按 F 摘樱花', pressPickCoconut: '按 F 摘椰子', pressOpenBuried: '按 F 开启宝箱',
+    coconut: (n) => `椰子 x${n}`, selectHint: '滚轮/方向键选择 · F 或点击确认',
     chest:      (g, d) => `宝箱！金币 x${g}  钻石 x${d}  小红花 x1`,
     fancyChest: (g, d) => `精致宝箱！金币 x${g}  钻石 x${d}  小红花 x2`,
     apple:      (n)    => `苹果 x${n}`,
     flower:     (n)    => `小红花 x${n}`,
     redeem: '兑换码', redeemPlaceholder: '输入兑换码',
     adminTitle: '地图编辑器', adminHint: '点击或拖动来编辑地图（自动保存）。草地=橡皮擦',
-    resetMap: '重置地图', exitAdmin: '退出', adminOn: '已进入管理员模式', publish: '发布到官网',
+    resetMap: '重置地图', exitAdmin: '退出', adminOn: '已进入管理员模式', publish: '发布到官网', published: '已发布！请将 mapdata.js 上传到服务器',
     chestLoot: (name, g, d, f) => `${name}！金币 x${g}  钻石 x${d}  小红花 x${f}`,
     cNormal: '普通的宝箱', cFancy: '精致的宝箱', cPrecious: '珍贵的宝箱', cSplendid: '华丽的宝箱',
     bGrass: '草地(擦除)', bDirt: '泥土', bSand: '沙地', bWater: '水',
     bTree: '圆树', bPine: '松树', bPalm: '棕榈', bCherry: '樱花树', bApple: '苹果树',
     bFlower: '小花', bSunflower: '太阳花',
     bChest: '普通的宝箱', bChestFancy: '精致的宝箱', bChestPrecious: '珍贵的宝箱', bChestSplendid: '华丽的宝箱',
+    bDigChest: '地埋·普通', bDigFancy: '地埋·精致', bDigPrecious: '地埋·珍贵', bDigSplendid: '地埋·华丽',
+    pressShop: '按 F 进入商店',
+    shopTitle: '🏪 小商店', shopClose: '关闭', shopGold: (n) => `当前金币：${n} 💰`,
+    shopBuy: '购买', shopPrice: (n) => `${n} 金币`,
+    shopNotEnough: '金币不足！', shopBought: (icon, n) => `购买了 ${icon} x${n}`,
+    cabbage: '卷心菜', tomato: '番茄', egg: '鸡蛋', rice: '大米', flour: '面粉',
+    salt: '盐', sugar: '糖', pepper: '胡椒', meat: '肉',
+    pressCook: '按 F 烹饪',
+    cookTitle: '🍳 灶台', cookClose: '关闭', cookNeed: '需要',
+    cook: '烹饪', cookDone: (icon, name) => `烹饪了 ${icon} ${name}`,
+    cookMissing: '食材不足',
+    scrambledEgg:  '番茄炒蛋',  candiedApple:  '拔丝苹果',
+    steamedRice:   '香喷喷的大米饭', tomatoNoodles: '番茄鸡蛋面',
+    tomatoEggRice: '番茄炒蛋盖浇饭',
+    friedEgg:       '煎鸡蛋',      eggFriedRice:   '蛋炒饭',
+    friedCabbage:   '炒卷心菜',    pepperCabbage:  '椒盐卷心菜',
+    cabbagePork:    '卷心菜炒肉',  redBraisedPork: '红烧肉',
+    friedPork:      '煎肉排',      mincedMeatRice: '肉末饭',
+    tomatoSoup:     '番茄汤',      sweetPancake:   '糖饼',
+    adminInvTitle: '背包编辑',
+    gold: '金币', diamond: '钻石', redflower: '小红花', apple: '苹果', coconut: '椰子',
+    bagTitle: '🎒 背包', bagIngredients: '食材', bagFood: '餐食', bagMaterials: '材料', bagEmpty: '空空如也',
+    lumber: '木材', pinecone: '松子',
+    choppedLumber: '木材 x1', choppedPine: (n) => `木材 x1  松子 x${n}`,
   },
   en: {
     settings: 'Settings', gender: 'Gender', male: 'Male', female: 'Female',
@@ -467,20 +617,45 @@ const I18N = {
     namePlaceholder: 'Enter name',
     pressOpen: 'Press F to open', pressDig: 'Press F to dig',
     pressOpenFancy: 'Press F to open chest', pressPickApple: 'Press F to pick apple',
-    pressPickCherry: 'Press F to pick blossom', selectHint: 'Wheel/Arrows to choose · F or click',
+    pressPickCherry: 'Press F to pick blossom', pressPickCoconut: 'Press F to pick coconut', pressOpenBuried: 'Press F to open chest',
+    coconut: (n) => `Coconut x${n}`, selectHint: 'Wheel/Arrows to choose · F or click',
     chest:      (g, d) => `Chest! Gold x${g}  Diamond x${d}  Flower x1`,
     fancyChest: (g, d) => `Fancy chest! Gold x${g}  Diamond x${d}  Flower x2`,
     apple:      (n)    => `Apple x${n}`,
     flower:     (n)    => `Flower x${n}`,
     redeem: 'Redeem', redeemPlaceholder: 'Enter code',
     adminTitle: 'Map Editor', adminHint: 'Click or drag to edit the map (auto-saved). Grass = eraser',
-    resetMap: 'Reset', exitAdmin: 'Exit', adminOn: 'Admin mode enabled', publish: 'Publish',
+    resetMap: 'Reset', exitAdmin: 'Exit', adminOn: 'Admin mode enabled', publish: 'Publish', published: 'Published! Upload mapdata.js to your server',
     chestLoot: (name, g, d, f) => `${name}! Gold x${g}  Diamond x${d}  Flower x${f}`,
     cNormal: 'Common Chest', cFancy: 'Exquisite Chest', cPrecious: 'Precious Chest', cSplendid: 'Luxurious Chest',
     bGrass: 'Grass (erase)', bDirt: 'Dirt', bSand: 'Sand', bWater: 'Water',
     bTree: 'Tree', bPine: 'Pine', bPalm: 'Palm', bCherry: 'Cherry', bApple: 'Apple',
     bFlower: 'Flower', bSunflower: 'Sunflower',
     bChest: 'Common Chest', bChestFancy: 'Exquisite Chest', bChestPrecious: 'Precious Chest', bChestSplendid: 'Luxurious Chest',
+    bDigChest: 'Buried Common', bDigFancy: 'Buried Exquisite', bDigPrecious: 'Buried Precious', bDigSplendid: 'Buried Luxurious',
+    pressShop: 'Press F to enter shop',
+    shopTitle: '🏪 Shop', shopClose: 'Close', shopGold: (n) => `Gold: ${n} 💰`,
+    shopBuy: 'Buy', shopPrice: (n) => `${n} Gold`,
+    shopNotEnough: 'Not enough gold!', shopBought: (icon, n) => `Bought ${icon} x${n}`,
+    cabbage: 'Cabbage', tomato: 'Tomato', egg: 'Egg', rice: 'Rice', flour: 'Flour',
+    salt: 'Salt', sugar: 'Sugar', pepper: 'Pepper', meat: 'Meat',
+    pressCook: 'Press F to cook',
+    cookTitle: '🍳 Stove', cookClose: 'Close', cookNeed: 'Needs',
+    cook: 'Cook', cookDone: (icon, name) => `Cooked ${icon} ${name}`,
+    cookMissing: 'Not enough ingredients',
+    scrambledEgg:  'Tomato & Egg Stir-fry', candiedApple:  'Candied Apple',
+    steamedRice:   'Fragrant Rice',          tomatoNoodles: 'Tomato Egg Noodles',
+    tomatoEggRice: 'Tomato Egg Rice Bowl',
+    friedEgg:       'Fried Egg',      eggFriedRice:   'Egg Fried Rice',
+    friedCabbage:   'Stir-fried Cabbage', pepperCabbage: 'Pepper Cabbage',
+    cabbagePork:    'Cabbage with Pork', redBraisedPork: 'Red-Braised Pork',
+    friedPork:      'Pan-fried Pork',    mincedMeatRice: 'Minced Meat Rice',
+    tomatoSoup:     'Tomato Soup',       sweetPancake:   'Sweet Pancake',
+    adminInvTitle: 'Inventory Editor',
+    gold: 'Gold', diamond: 'Diamond', redflower: 'Flower', apple: 'Apple', coconut: 'Coconut',
+    bagTitle: '🎒 Backpack', bagIngredients: 'Ingredients', bagFood: 'Food', bagMaterials: 'Materials', bagEmpty: 'Empty',
+    lumber: 'Lumber', pinecone: 'Pine Cone',
+    choppedLumber: 'Lumber x1', choppedPine: (n) => `Lumber x1  Pine Cone x${n}`,
   },
 };
 function t(key, ...args) {
@@ -492,7 +667,7 @@ function t(key, ...args) {
 let settingsOpen = false;
 const keys = {};
 function isTyping(e) {
-  return settingsOpen || (e.target && e.target.tagName === 'INPUT');
+  return settingsOpen || shopOpen || cookOpen || bagOpen || (e.target && e.target.tagName === 'INPUT');
 }
 window.addEventListener('keydown', e => {
   if (isTyping(e)) return;
@@ -559,11 +734,20 @@ canvas.addEventListener('click', e => {
     }
   }
 
-  // 2) otherwise, walk to the clicked tile
+  // 2) tree chopping — click on a tree tile while standing adjacent
   const rect = canvas.getBoundingClientRect();
   const wx = (e.clientX - rect.left) + Math.round(camX);
   const wy = (e.clientY - rect.top)  + Math.round(camY);
   const tc = Math.floor(wx / TILE), tr = Math.floor(wy / TILE);
+
+  if (tc >= 0 && tc < COLS && tr >= 0 && tr < ROWS &&
+      TREE_TILE_TYPES.has(map[tr][tc]) &&
+      Math.max(Math.abs(tc - player.col), Math.abs(tr - player.row)) <= 1) {
+    chopTree(tc, tr);
+    return;
+  }
+
+  // 3) otherwise, walk to the clicked tile
   const sc = player.moving ? player.targetCol : player.col;
   const sr = player.moving ? player.targetRow : player.row;
   const path = findPath(sc, sr, tc, tr);
@@ -578,7 +762,8 @@ canvas.addEventListener('click', e => {
 // (so you can lay dirt under a chest); object brushes keep the terrain.
 function paintTile(c, r) {
   if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
-  if (monumentBlocked[`${c},${r}`]) return;
+  if (monumentBlocked[`${c},${r}`]) return; // monument plinth
+  if (BUILDING_TILES.has(`${c},${r}`)) return; // all registered buildings
   const k = `${c},${r}`;
   const prev = mapEdits[k] ? normalizeState(mapEdits[k]) : null;
   let st;
@@ -626,6 +811,8 @@ function isWalkable(r, c) {
   const _mapCh = chestMap[`${c},${r}`];
   if (_mapCh && !_mapCh.open)        return false;
   if (monumentBlocked[`${c},${r}`])  return false;
+  if (c === SHOP_COL  && r === SHOP_ROW)  return false;
+  if (c === STOVE_COL && r === STOVE_ROW) return false;
   const t = map[r][c];
   if (t === T.WATER) {
     const b = bridgeTileIndex[`${c},${r}`];
@@ -643,7 +830,8 @@ function findPath(sc, sr, tc, tr) {
   const key   = (c, r) => r * COLS + c;
   const seen  = new Uint8Array(COLS * ROWS);
   const prev  = new Int32Array(COLS * ROWS).fill(-1);
-  const dirs  = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  // 8-directional: orthogonal + diagonal (45°) moves
+  const dirs  = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
   const q     = [[sc, sr]];
   let head    = 0;
   seen[key(sc, sr)] = 1;
@@ -657,6 +845,9 @@ function findPath(sc, sr, tc, tr) {
       if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
       const k = key(nc, nr);
       if (seen[k] || !isWalkable(nr, nc)) continue;
+      // Don't cut diagonally through a blocked corner
+      if (dc !== 0 && dr !== 0 &&
+          !isWalkable(r, c + dc) && !isWalkable(r + dr, c)) continue;
       seen[k] = 1;
       prev[k] = key(c, r);
       q.push([nc, nr]);
@@ -699,17 +890,18 @@ function doOpenChest(ch) {
   lootMessage = { text: t('chestLoot', t(spec.name), gold, diamond, spec.f), timer: 220 };
 }
 
-function doDig() { digSpot.dug = true; }
+function doDig(ds) { ds.dug = true; }
 
-function doOpenFancy() {
-  digSpot.chestOpen     = true;
-  digSpot.disappearTimer = 240;
-  const gold    = Math.floor(Math.random() * 13) + 3;
-  const diamond = Math.floor(Math.random() * 13) + 3;
+function doOpenDigChest(ds) {
+  ds.chestOpen      = true;
+  ds.disappearTimer = 240;
+  const spec    = CHEST_LOOT[ds.chestType] || CHEST_LOOT.fancy;
+  const gold    = randInt(spec.g[0], spec.g[1]);
+  const diamond = randInt(spec.d[0], spec.d[1]);
   inventory.gold      += gold;
   inventory.diamond   += diamond;
-  inventory.redflower += 2;
-  lootMessage = { text: t('fancyChest', gold, diamond), timer: 240 };
+  inventory.redflower += spec.f;
+  lootMessage = { text: t('chestLoot', t(spec.name), gold, diamond, spec.f), timer: 240 };
 }
 
 function doPickApple(at) {
@@ -725,6 +917,58 @@ function doPickCherry(ct) {
   lootMessage = { text: t('flower', 1), timer: 180 };
 }
 
+function doPickCoconut(pt) {
+  const n = pt.coconuts;
+  pt.coconuts = 0;
+  inventory.coconut += n;
+  lootMessage = { text: t('coconut', n), timer: 180 };
+  renderTreeCanvas();
+}
+
+function chopTree(c, r) {
+  if (!TREE_TILE_TYPES.has(map[r][c])) return;
+  const k = `${c},${r}`;
+  treeHits[k] = (treeHits[k] || 0) + 1;
+  const treeType = map[r][c];
+  shakingTree = { col: c, row: r, type: treeType, timer: 18 };
+
+  if (treeHits[k] >= CHOP_HITS) {
+    delete treeHits[k];
+    shakingTree = null;
+    // Remove tree from map and all live data structures
+    removeTileObjects(c, r);
+    map[r][c] = T.GRASS;
+    const pinecones = (treeType === T.PINE) ? Math.floor(Math.random() * 3) + 1 : 0;
+    fallenTrees.push({ col: c, row: r, lumber: 1, pinecones });
+    renderTreeCanvas();
+    // Auto-walk player to the lumber
+    const sc = player.moving ? player.targetCol : player.col;
+    const sr = player.moving ? player.targetRow : player.row;
+    const path = findPath(sc, sr, c, r);
+    if (path.length) { movePath = path; moveTarget = { col: c, row: r, t: 40 }; }
+  }
+}
+
+function drawTreeByType(g, x, y, type) {
+  if      (type === T.TREE)   drawTree(g, x, y);
+  else if (type === T.PINE)   drawPineTree(g, x, y);
+  else if (type === T.PALM)   drawPalmTree(g, x, y, 0);
+  else if (type === T.CHERRY) drawCherryTree(g, x, y);
+  else if (type === T.APPLE)  drawAppleTree(g, x, y, 0);
+}
+
+function doOpenShop() {
+  shopOpen = true;
+  for (const k in keys) keys[k] = false;
+  openShopUI();
+}
+
+function doOpenCooking() {
+  cookOpen = true;
+  for (const k in keys) keys[k] = false;
+  openCookUI();
+}
+
 // Build the list of interactions the player can currently reach.
 // Each entry: { icon, label, act }
 function buildInteractions() {
@@ -732,9 +976,10 @@ function buildInteractions() {
   for (const ch of chests) {
     if (!ch.open && near(ch)) list.push({ icon: '💰', label: t('pressOpen'), act: () => doOpenChest(ch) });
   }
-  if (!digSpot.removed && near(digSpot)) {
-    if (!digSpot.dug)            list.push({ icon: '⛏️', label: t('pressDig'),       act: doDig });
-    else if (!digSpot.chestOpen) list.push({ icon: '🎁', label: t('pressOpenFancy'), act: doOpenFancy });
+  for (const ds of digSpots) {
+    if (!near(ds)) continue;
+    if (!ds.dug)            list.push({ icon: '⛏️', label: t('pressDig'),        act: () => doDig(ds) });
+    else if (!ds.chestOpen) list.push({ icon: '🎁', label: t('pressOpenBuried'), act: () => doOpenDigChest(ds) });
   }
   for (const at of appleTrees) {
     if (!at.picked && near(at)) list.push({ icon: '🍎', label: t('pressPickApple'), act: () => doPickApple(at) });
@@ -742,6 +987,13 @@ function buildInteractions() {
   for (const ct of cherryTrees) {
     if (ct.flowers > 0 && near(ct)) list.push({ icon: '🌸', label: t('pressPickCherry'), act: () => doPickCherry(ct) });
   }
+  for (const pt of palmTrees) {
+    if (pt.coconuts > 0 && near(pt)) list.push({ icon: '🥥', label: t('pressPickCoconut'), act: () => doPickCoconut(pt) });
+  }
+  if (Math.abs(player.col - SHOP_COL)  <= 1 && Math.abs(player.row - SHOP_ROW)  <= 1)
+    list.push({ icon: '🏪', label: t('pressShop'), act: doOpenShop });
+  if (Math.abs(player.col - STOVE_COL) <= 1 && Math.abs(player.row - STOVE_ROW) <= 1)
+    list.push({ icon: '🍳', label: t('pressCook'), act: doOpenCooking });
   return list;
 }
 
@@ -851,7 +1103,7 @@ function drawPineTree(g, x, y) {
   g.fill();
 }
 
-function drawPalmTree(g, x, y) {
+function drawPalmTree(g, x, y, coconuts) {
   // trunk (slight curve)
   g.strokeStyle = '#7a5530';
   g.lineWidth = 4;
@@ -859,6 +1111,20 @@ function drawPalmTree(g, x, y) {
   g.moveTo(x + 16, y + 32);
   g.quadraticCurveTo(x + 20, y + 14, x + 18, y + 4);
   g.stroke();
+  // coconuts clustered under the crown (drawn before fronds so fronds overlap)
+  if (coconuts > 0) {
+    const cocoPos = [[12, 8], [22, 9], [17, 12]];
+    for (let i = 0; i < coconuts && i < cocoPos.length; i++) {
+      g.fillStyle = '#5a3318';
+      g.beginPath();
+      g.arc(x + cocoPos[i][0], y + cocoPos[i][1], 3, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = '#7a4a26';
+      g.beginPath();
+      g.arc(x + cocoPos[i][0] - 1, y + cocoPos[i][1] - 1, 1, 0, Math.PI * 2);
+      g.fill();
+    }
+  }
   // fronds
   const fronds = [[-16,-5],[6,-14],[20,-3],[-3,12],[-18,5]];
   g.lineWidth = 3;
@@ -938,6 +1204,24 @@ function drawAppleTree(g, x, y, count) {
 
 // ── Flower drawing ────────────────────────────────────────────────────────────
 function drawFlower(g, x, y, type) {
+  if (type === 'emerald') {
+    // jade/emerald-green flower marking a buried treasure
+    g.fillStyle = '#1f7a52';
+    g.fillRect(x + 15, y + 18, 2, 12);
+    const petals = ['#1fd190', '#19b87a', '#2fe6a6'];
+    for (let i = 0; i < 6; i++) {
+      const a = i * Math.PI * 2 / 6;
+      g.fillStyle = petals[i % petals.length];
+      g.beginPath();
+      g.ellipse(x + 16 + Math.cos(a) * 5, y + 16 + Math.sin(a) * 5, 3.2, 2.2, a, 0, Math.PI * 2);
+      g.fill();
+    }
+    g.fillStyle = '#0c5c3a';
+    g.beginPath();
+    g.arc(x + 16, y + 16, 2.6, 0, Math.PI * 2);
+    g.fill();
+    return;
+  }
   if (type === 'sunflower') {
     g.fillStyle = '#3a8020';
     g.fillRect(x + 15, y + 16, 2, 14);
@@ -1363,6 +1647,7 @@ function renderStaticMap() {
       if      (t === T.WATER) drawWaterBase(mctx, x, y, seed[r][c]);
       else if (t === T.SAND)  drawSand(mctx, x, y, seed[r][c]);
       else if (t === T.DIRT)  drawDirt(mctx, x, y);
+      else if (t === T.PALM && palmOnSand[`${c},${r}`]) drawSand(mctx, x, y, seed[r][c]);
       else                    drawGrass(mctx, x, y, seed[r][c]);
     }
   }
@@ -1381,7 +1666,10 @@ function renderTreeCanvas() {
       const t = map[r][c];
       if      (t === T.TREE)   drawTree(tctx, c * TILE, r * TILE);
       else if (t === T.PINE)   drawPineTree(tctx, c * TILE, r * TILE);
-      else if (t === T.PALM)   drawPalmTree(tctx, c * TILE, r * TILE);
+      else if (t === T.PALM)   {
+        const pt = palmTreeMap[`${c},${r}`];
+        drawPalmTree(tctx, c * TILE, r * TILE, pt ? pt.coconuts : 0);
+      }
       else if (t === T.CHERRY) drawCherryTree(tctx, c * TILE, r * TILE);
       else if (t === T.APPLE)  {
         const at = appleTreeMap[`${c},${r}`];
@@ -1390,6 +1678,106 @@ function renderTreeCanvas() {
     }
   }
   drawMonument(tctx);
+  drawShopBuilding(tctx);
+  drawStoveBuilding(tctx);
+}
+
+function drawShopBuilding(g) {
+  const x = SHOP_COL * TILE, y = SHOP_ROW * TILE;
+  // Shadow
+  g.fillStyle = 'rgba(0,0,0,0.18)';
+  g.fillRect(x - 4, y + 44, 44, 6);
+  // Wall
+  g.fillStyle = '#d4a85a';
+  g.fillRect(x - 2, y + 8, 38, 38);
+  // Door
+  g.fillStyle = '#7a4a18';
+  g.fillRect(x + 11, y + 26, 12, 20);
+  // Door knob
+  g.fillStyle = '#ffd84d';
+  g.beginPath(); g.arc(x + 21, y + 36, 2, 0, Math.PI * 2); g.fill();
+  // Window left
+  g.fillStyle = '#b0d8f0';
+  g.fillRect(x, y + 16, 9, 8);
+  g.strokeStyle = '#7a4a18'; g.lineWidth = 1;
+  g.strokeRect(x, y + 16, 9, 8);
+  g.beginPath(); g.moveTo(x + 4, y + 16); g.lineTo(x + 4, y + 24); g.stroke();
+  // Window right
+  g.fillStyle = '#b0d8f0';
+  g.fillRect(x + 25, y + 16, 9, 8);
+  g.strokeRect(x + 25, y + 16, 9, 8);
+  g.beginPath(); g.moveTo(x + 29, y + 16); g.lineTo(x + 29, y + 24); g.stroke();
+  // Roof (triangle)
+  g.fillStyle = '#c0392b';
+  g.beginPath();
+  g.moveTo(x - 6, y + 10);
+  g.lineTo(x + 18, y - 14);
+  g.lineTo(x + 42, y + 10);
+  g.closePath();
+  g.fill();
+  // Roof ridge
+  g.fillStyle = '#96241c';
+  g.beginPath();
+  g.moveTo(x + 18, y - 14);
+  g.lineTo(x + 42, y + 10);
+  g.lineTo(x + 18, y - 12);
+  g.closePath();
+  g.fill();
+  // Sign above door
+  g.fillStyle = '#ffd84d';
+  g.fillRect(x + 6, y + 1, 22, 10);
+  g.fillStyle = '#7a4a18';
+  g.font = 'bold 7px sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('SHOP', x + 17, y + 6);
+}
+
+function drawStoveBuilding(g) {
+  const x = STOVE_COL * TILE, y = STOVE_ROW * TILE;
+  // Body
+  g.fillStyle = '#555560';
+  g.fillRect(x + 2, y + 10, 28, 28);
+  // Top surface (burner plate)
+  g.fillStyle = '#404050';
+  g.fillRect(x + 2, y + 6, 28, 8);
+  // Four burner rings (static)
+  for (const [bx, by] of [[9,10],[23,10],[9,22],[23,22]]) {
+    g.fillStyle = '#282838';
+    g.beginPath(); g.arc(x + bx, y + by, 4, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = '#555'; g.lineWidth = 1;
+    g.beginPath(); g.arc(x + bx, y + by, 5, 0, Math.PI * 2); g.stroke();
+  }
+  // Front panel
+  g.fillStyle = '#4a4a58';
+  g.fillRect(x + 4, y + 26, 24, 10);
+  g.fillStyle = '#333340';
+  g.fillRect(x + 6, y + 28, 20, 6);
+  // Sign
+  g.fillStyle = '#ff8800';
+  g.fillRect(x + 5, y + 1, 22, 7);
+  g.fillStyle = '#fff';
+  g.font = 'bold 6px sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('STOVE', x + 16, y + 4);
+}
+
+// Draw animated stove flames — called every frame in draw() (world-space, before tree overlay)
+function drawStoveFlames() {
+  const x = STOVE_COL * TILE, y = STOVE_ROW * TILE;
+  const burners = [[9,10],[23,10],[9,22],[23,22]];
+  const phase = (tick >> 3) % 4;
+  const flameColors = ['#ff6020','#ff8800','#ffaa00'];
+  for (let i = 0; i < burners.length; i++) {
+    if ((i + phase) % 2 !== 0) continue; // alternate flicker
+    const [bx, by] = burners[i];
+    ctx.fillStyle = flameColors[(tick >> 2) % flameColors.length];
+    ctx.beginPath();
+    ctx.moveTo(x + bx,     y + by - 6);
+    ctx.lineTo(x + bx - 3, y + by - 1);
+    ctx.lineTo(x + bx + 3, y + by - 1);
+    ctx.closePath();
+    ctx.fill();
+  }
 }
 
 // ── Bridge & rainbow drawing ──────────────────────────────────────────────────
@@ -1486,7 +1874,9 @@ function update() {
   for (const ch of chests) {
     if (ch.open && ch.disappearTimer > 0) ch.disappearTimer--;
   }
-  if (digSpot.chestOpen && digSpot.disappearTimer > 0) digSpot.disappearTimer--;
+  for (const ds of digSpots) {
+    if (ds.chestOpen && ds.disappearTimer > 0) ds.disappearTimer--;
+  }
 
   if (player.moving) {
     const tx   = player.targetCol * TILE;
@@ -1552,6 +1942,26 @@ function update() {
   if (moveTarget && moveTarget.t > 0) moveTarget.t--;
   if (movePath.length === 0 && moveTarget && moveTarget.t <= 0) moveTarget = null;
 
+  // Tick shake animation
+  if (shakingTree && shakingTree.timer > 0) shakingTree.timer--;
+
+  // Auto-collect fallen trees when player arrives
+  if (!player.moving) {
+    for (let i = fallenTrees.length - 1; i >= 0; i--) {
+      const ft = fallenTrees[i];
+      if (player.col === ft.col && player.row === ft.row) {
+        inventory.lumber += ft.lumber;
+        inventory.pinecone += ft.pinecones;
+        lootMessage = {
+          text: ft.pinecones > 0 ? t('choppedPine', ft.pinecones) : t('choppedLumber'),
+          timer: 150,
+        };
+        fallenTrees.splice(i, 1);
+        break;
+      }
+    }
+  }
+
   updateCamera();
 }
 
@@ -1559,21 +1969,17 @@ function update() {
 function drawHUD() {
   ctx.save();
 
-  // Inventory bar
-  const barW = 310, barH = 34, barX = Math.round(canvas.width / 2 - barW / 2), barY = 10;
-  roundRectPath(ctx, barX, barY, barW, barH, 10);
-  ctx.fillStyle = 'rgba(18,18,20,0.88)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.14)';
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
+  // Top bar — gold and diamond only
+  const hudText = `💰 ${inventory.gold}   💎 ${inventory.diamond}`;
   ctx.font = '600 13px ' + UI_FONT;
-  ctx.textAlign    = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle    = '#ffd84d';
-  ctx.fillText(`💰 ${inventory.gold}   💎 ${inventory.diamond}   🌸 ${inventory.redflower}   🍎 ${inventory.apple}`,
-    canvas.width / 2, barY + barH / 2 + 1);
+  const barH = 34, barW = Math.ceil(ctx.measureText(hudText).width) + 32;
+  const barX = Math.round(canvas.width / 2 - barW / 2), barY = 10;
+  roundRectPath(ctx, barX, barY, barW, barH, 10);
+  ctx.fillStyle = 'rgba(18,18,20,0.88)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffd84d';
+  ctx.fillText(hudText, canvas.width / 2, barY + barH / 2 + 1);
 
   // Loot popup
   if (lootMessage) {
@@ -1620,6 +2026,9 @@ function draw() {
   // Bridges (under player)
   for (const p of ponds) if (p.grow > 0) drawBridge(p);
 
+  // Stove flames (animated, drawn before tree overlay)
+  drawStoveFlames();
+
   // Click-to-move destination marker
   if (moveTarget && (movePath.length || moveTarget.t > 0)) {
     const mx = moveTarget.col * TILE + 16, my = moveTarget.row * TILE + 16;
@@ -1650,18 +2059,53 @@ function draw() {
     ctx.restore();
   }
 
-  // ── Dig spot ──────────────────────────────────────────────────────────────
-  if (digSpot.dug && !digSpot.removed) {
-    const digAlpha = (digSpot.chestOpen && digSpot.disappearTimer <= 60)
-      ? digSpot.disappearTimer / 60 : 1;
-    const digGone  = digSpot.chestOpen && digSpot.disappearTimer <= 0;
-    drawDugTile(digSpot.col * TILE, digSpot.row * TILE);
+  // ── Dig spots ─────────────────────────────────────────────────────────────
+  for (const ds of digSpots) {
+    if (ds.col < startC || ds.col >= endC || ds.row < startR || ds.row >= endR) continue;
+    if (!ds.dug) {
+      // In the editor, show buried chests so the admin can see/erase them
+      if (adminMode) {
+        const mx = ds.col * TILE + 16, my = ds.row * TILE + 16;
+        ctx.save();
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = 'rgba(255,216,77,0.85)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(ds.col * TILE + 4, ds.row * TILE + 4, TILE - 8, TILE - 8);
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(255,216,77,0.9)';
+        ctx.font = '12px ' + UI_FONT;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('⛏', mx, my + 1);
+        ctx.restore();
+      }
+      continue;
+    }
+    const digAlpha = (ds.chestOpen && ds.disappearTimer <= 60) ? ds.disappearTimer / 60 : 1;
+    const digGone  = ds.chestOpen && ds.disappearTimer <= 0;
+    drawDugTile(ds.col * TILE, ds.row * TILE);
     if (!digGone) {
       ctx.save();
       ctx.globalAlpha = digAlpha;
-      drawFancyChest(digSpot.col * TILE, digSpot.row * TILE - 4, digSpot.chestOpen);
+      drawChestByType(ds.chestType, ds.col * TILE, ds.row * TILE - 4, ds.chestOpen);
       ctx.restore();
     }
+  }
+
+  // ── Fallen trees (lumber piles on the ground) ─────────────────────────────
+  for (const ft of fallenTrees) {
+    if (ft.col < startC || ft.col >= endC || ft.row < startR || ft.row >= endR) continue;
+    const fx = ft.col * TILE, fy = ft.row * TILE;
+    ctx.fillStyle = '#7a4a1a';
+    ctx.fillRect(fx + 4, fy + 18, 24, 8);
+    ctx.fillStyle = '#5a3210';
+    ctx.fillRect(fx + 4, fy + 20, 24, 4);
+    ctx.strokeStyle = '#4a2810'; ctx.lineWidth = 1;
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath(); ctx.moveTo(fx + 4, fy + 19 + i * 3); ctx.lineTo(fx + 28, fy + 19 + i * 3); ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(255,216,77,0.9)';
+    ctx.font = '10px ' + UI_FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('🪵', fx + 16, fy + 10);
   }
 
   // ── Player ────────────────────────────────────────────────────────────────
@@ -1670,6 +2114,26 @@ function draw() {
 
   // ── Tree + monument + castle overlay ─────────────────────────────────────
   ctx.drawImage(treeCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
+
+  // ── Shaking tree animation (drawn on top of the treeCanvas to show offset) ─
+  if (shakingTree && shakingTree.timer > 0) {
+    const { col: sc2, row: sr2, type: st2, timer: stm } = shakingTree;
+    const tx = sc2 * TILE, ty = sr2 * TILE;
+    const offsetX = Math.round(Math.sin((18 - stm) * 1.1) * 4);
+    // Cover the static version with the ground underneath
+    const gs = seed[sr2] ? seed[sr2][sc2] : 0;
+    if (palmOnSand[`${sc2},${sr2}`]) drawSand(ctx, tx, ty, gs);
+    else drawGrass(ctx, tx, ty, gs);
+    // Redraw the tree displaced
+    drawTreeByType(ctx, tx + offsetX, ty, st2);
+    // Hit-count indicator
+    const hits = treeHits[`${sc2},${sr2}`] || 0;
+    ctx.save();
+    ctx.font = 'bold 11px ' + UI_FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    ctx.fillStyle = '#ffd84d';
+    ctx.fillText('⚔'.repeat(hits) + '○'.repeat(CHOP_HITS - hits), tx + 16, ty - 2);
+    ctx.restore();
+  }
 
   // ── Occlusion ghost (player shown through overlay objects) ────────────────
   const PAD = 12;
@@ -1827,11 +2291,17 @@ nameInput.addEventListener('input', () => { settings.name = nameInput.value; sav
 
 // Redeem code → unlock admin map editor
 redeemInput.addEventListener('input', () => {
-  if (redeemInput.value.trim() === '142857') {
-    redeemInput.value = '';
-    enableAdmin();
-    lootMessage = { text: t('adminOn'), timer: 180 };
-  }
+  const val = redeemInput.value.trim();
+  if (val.length < 4) return;
+  const enc = new TextEncoder();
+  crypto.subtle.digest('SHA-256', enc.encode(val)).then(buf => {
+    const hex = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+    if (hex === 'ebd72b510911af3e254a030cd891cb804e1902189eee7a0f6199472eb5e4dba2') {
+      redeemInput.value = '';
+      enableAdmin();
+      lootMessage = { text: t('adminOn'), timer: 180 };
+    }
+  });
 });
 
 // ── Admin editor: brush palette ───────────────────────────────────────────────
@@ -1851,6 +2321,10 @@ const BRUSHES = [
   { id: 'chestFancy',    key: 'bChestFancy',    color: '#c8920a' },
   { id: 'chestPrecious', key: 'bChestPrecious', color: '#78a8c0' },
   { id: 'chestSplendid', key: 'bChestSplendid', color: '#ffe060' },
+  { id: 'digChest',      key: 'bDigChest',      color: '#6b3d1e' },
+  { id: 'digFancy',      key: 'bDigFancy',      color: '#6b3d1e' },
+  { id: 'digPrecious',   key: 'bDigPrecious',   color: '#6b3d1e' },
+  { id: 'digSplendid',   key: 'bDigSplendid',   color: '#6b3d1e' },
 ];
 BRUSHES.forEach(br => {
   const b = document.createElement('button');
@@ -1931,6 +2405,7 @@ function enableAdmin() {
   adminPanel.classList.remove('hidden');
   refreshBrushUI();
   applyLanguageLabels();
+  refreshAdminInv();
   movePath = []; moveTarget = null; // stop any pending click-to-move
 }
 function disableAdmin() {
@@ -1948,7 +2423,10 @@ resetMapBtn.addEventListener('click', () => {
 // Publish: download an updated mapdata.js containing the full effective edit set.
 // Replace mapdata.js on the website to make these edits the shared baseline.
 publishBtn.addEventListener('click', () => {
+  // Merge local edits into the shared baseline.
   const merged = Object.assign({}, publishedMap, mapEdits);
+
+  // Export mapdata.js — upload this file to the server to push changes to all players.
   const content =
     '// Official published map for Map Explorer (generated by the in-game editor).\n' +
     'window.PUBLISHED_MAP = ' + JSON.stringify(merged) + ';\n';
@@ -1956,13 +2434,200 @@ publishBtn.addEventListener('click', () => {
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href = url; a.download = 'mapdata.js';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
+
+  // Promote local edits into the in-memory published baseline and clear them.
+  // This avoids double-application on next load once mapdata.js is on the server.
+  Object.assign(publishedMap, merged);
+  mapEdits = {};
+  saveMapEdits();
+  lootMessage = { text: t('published'), timer: 240 };
 });
 
 refreshSettingsUI();
+
+// ── Admin inventory editor ────────────────────────────────────────────────────
+const adminInvList = document.getElementById('adminInvList');
+function buildAdminInvEditor() {
+  adminInvList.innerHTML = '';
+  INVENTORY_META.forEach(({ key, icon }) => {
+    const row = document.createElement('div');
+    row.className = 'inv-row';
+    const ic = document.createElement('span'); ic.className = 'inv-icon'; ic.textContent = icon;
+    const nm = document.createElement('span'); nm.className = 'inv-name'; nm.textContent = t(key) || key;
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.min = '0'; inp.step = '1';
+    inp.value = inventory[key];
+    inp.addEventListener('input', () => {
+      const v = Math.max(0, parseInt(inp.value) || 0);
+      inventory[key] = v;
+      inp.value = v;
+    });
+    row.appendChild(ic); row.appendChild(nm); row.appendChild(inp);
+    adminInvList.appendChild(row);
+  });
+}
+
+// ── Shop UI ───────────────────────────────────────────────────────────────────
+const shopModal   = document.getElementById('shopModal');
+const shopCloseEl = document.getElementById('shopCloseBtn');
+const shopItemEl  = document.getElementById('shopItemList');
+const shopGoldEl  = document.getElementById('shopGold');
+const shopTitleEl = document.getElementById('shopTitle');
+
+function openShopUI() {
+  shopTitleEl.textContent = t('shopTitle');
+  shopCloseEl.textContent = t('shopClose');
+  shopGoldEl.textContent  = t('shopGold', inventory.gold);
+  shopItemEl.innerHTML    = '';
+  SHOP_ITEMS.forEach(item => {
+    const div = document.createElement('div');
+    div.className = 'shop-item';
+    div.innerHTML = `
+      <span class="si-icon">${item.icon}</span>
+      <div class="si-info">
+        <div class="si-name">${t(item.key)}</div>
+        <div class="si-price">${t('shopPrice', item.price)}</div>
+      </div>
+      <button class="si-buy">${t('shopBuy')}</button>`;
+    const btn = div.querySelector('.si-buy');
+    btn.disabled = inventory.gold < item.price;
+    btn.addEventListener('click', () => {
+      if (inventory.gold < item.price) {
+        lootMessage = { text: t('shopNotEnough'), timer: 120 };
+        return;
+      }
+      inventory.gold -= item.price;
+      inventory[item.key]++;
+      lootMessage = { text: t('shopBought', item.icon, 1), timer: 150 };
+      openShopUI(); // refresh gold display + button states
+    });
+    shopItemEl.appendChild(div);
+  });
+  shopModal.classList.remove('hidden');
+}
+
+function closeShopUI() {
+  shopOpen = false;
+  shopModal.classList.add('hidden');
+}
+
+shopCloseEl.addEventListener('click', closeShopUI);
+shopModal.addEventListener('click', e => { if (e.target === shopModal) closeShopUI(); });
+
+// ── Cooking UI ────────────────────────────────────────────────────────────────
+const cookModal     = document.getElementById('cookModal');
+const cookCloseBtn  = document.getElementById('cookCloseBtn');
+const cookRecipeEl  = document.getElementById('cookRecipeList');
+const cookTitleEl   = document.getElementById('cookTitle');
+
+function canCook(recipe) {
+  return Object.entries(recipe.needs).every(([k, n]) => (inventory[k] || 0) >= n);
+}
+
+function openCookUI() {
+  cookTitleEl.textContent  = t('cookTitle');
+  cookCloseBtn.textContent = t('cookClose');
+  cookRecipeEl.innerHTML   = '';
+
+  // Sort: cookable first
+  const sorted = [...RECIPES].sort((a, b) => (canCook(b) ? 1 : 0) - (canCook(a) ? 1 : 0));
+  sorted.forEach(recipe => {
+    const cookable = canCook(recipe);
+    const row = document.createElement('div');
+    row.className = 'recipe-row';
+
+    const needsHtml = Object.entries(recipe.needs).map(([k, n]) => {
+      const have = inventory[k] || 0;
+      const ok   = have >= n;
+      const meta = INVENTORY_META.find(m => m.key === k);
+      const icon = meta ? meta.icon : '';
+      return `<span class="rr-chip ${ok ? 'ok' : 'bad'}">${icon} ${t(k) || k} ${have}/${n}</span>`;
+    }).join('');
+
+    row.innerHTML = `
+      <span class="rr-icon">${recipe.icon}</span>
+      <div class="rr-info">
+        <div class="rr-name">${t(recipe.key)}</div>
+        <div class="rr-needs">${needsHtml}</div>
+      </div>
+      <button ${cookable ? '' : 'disabled'}>${t('cook')}</button>`;
+
+    row.querySelector('button').addEventListener('click', () => {
+      if (!canCook(recipe)) { lootMessage = { text: t('cookMissing'), timer: 120 }; return; }
+      Object.entries(recipe.needs).forEach(([k, n]) => { inventory[k] -= n; });
+      inventory[recipe.key] = (inventory[recipe.key] || 0) + 1;
+      lootMessage = { text: t('cookDone', recipe.icon, t(recipe.key)), timer: 180 };
+      openCookUI(); // refresh ingredient counts
+    });
+    cookRecipeEl.appendChild(row);
+  });
+  cookModal.classList.remove('hidden');
+}
+
+function closeCookUI() {
+  cookOpen = false;
+  cookModal.classList.add('hidden');
+}
+
+cookCloseBtn.addEventListener('click', closeCookUI);
+cookModal.addEventListener('click', e => { if (e.target === cookModal) closeCookUI(); });
+
+// ── Backpack UI ───────────────────────────────────────────────────────────────
+const bagBtn      = document.getElementById('bagBtn');
+const bagModal    = document.getElementById('bagModal');
+const bagCloseBtn = document.getElementById('bagCloseBtn');
+
+function buildBagSection(gridEl, keys) {
+  gridEl.innerHTML = '';
+  let shown = 0;
+  keys.forEach(key => {
+    const n = inventory[key] || 0;
+    if (n === 0) return;
+    const meta = INVENTORY_META.find(m => m.key === key);
+    if (!meta) return;
+    const chip = document.createElement('div');
+    chip.className = 'bag-chip';
+    chip.innerHTML =
+      `<span class="bc-icon">${meta.icon}</span>` +
+      `<span class="bc-count">${n}</span>` +
+      `<span class="bc-name">${t(key) || key}</span>`;
+    gridEl.appendChild(chip);
+    shown++;
+  });
+  if (shown === 0) {
+    const empty = document.createElement('span');
+    empty.className = 'bag-empty';
+    empty.textContent = t('bagEmpty');
+    gridEl.appendChild(empty);
+  }
+}
+
+function openBagUI() {
+  bagOpen = true;
+  for (const k in keys) keys[k] = false;
+  document.getElementById('bagTitle').textContent    = t('bagTitle');
+  document.getElementById('bagIngTitle').textContent = t('bagIngredients');
+  document.getElementById('bagFoodTitle').textContent= t('bagFood');
+  document.getElementById('bagMatTitle').textContent = t('bagMaterials');
+  bagCloseBtn.textContent = t('close');
+  buildBagSection(document.getElementById('bagIngGrid'),  BAG_INGREDIENT_KEYS);
+  buildBagSection(document.getElementById('bagFoodGrid'), BAG_FOOD_KEYS);
+  buildBagSection(document.getElementById('bagMatGrid'),  BAG_MATERIAL_KEYS);
+  bagModal.classList.remove('hidden');
+}
+function closeBagUI() { bagOpen = false; bagModal.classList.add('hidden'); }
+
+bagBtn.addEventListener('click', openBagUI);
+bagCloseBtn.addEventListener('click', closeBagUI);
+bagModal.addEventListener('click', e => { if (e.target === bagModal) closeBagUI(); });
+
+// Rebuild inventory editor whenever admin panel opens (called from enableAdmin patch below)
+function refreshAdminInv() {
+  document.getElementById('adminInvTitle').textContent = t('adminInvTitle');
+  buildAdminInvEditor();
+}
 
 renderStaticMap();
 loop();
