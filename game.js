@@ -275,6 +275,16 @@ for (let r = 0; r < ROWS; r++) {
   }
 }
 
+// ── Cherry tree data ──────────────────────────────────────────────────────────
+const cherryTrees = [];
+for (let r = 0; r < ROWS; r++) {
+  for (let c = 0; c < COLS; c++) {
+    if (map[r][c] === T.CHERRY) {
+      cherryTrees.push({ col: c, row: r, flowers: 3 }); // 3 pickable blossoms each
+    }
+  }
+}
+
 // ── Player ────────────────────────────────────────────────────────────────────
 const SPEED = 3;
 const player = {
@@ -287,17 +297,133 @@ const player = {
 let tick = 0;
 let camX = 0, camY = 0;
 
+// ── Settings & clothes presets ────────────────────────────────────────────────
+const CLOTHES = [
+  { body: '#2a5abf', legs: '#1a3880' }, // blue
+  { body: '#c0392b', legs: '#7b241c' }, // red
+  { body: '#27ae60', legs: '#196f3d' }, // green
+  { body: '#8e44ad', legs: '#5b2c6f' }, // purple
+  { body: '#e67e22', legs: '#a04000' }, // orange
+];
+
+const settings = {
+  gender: 'male',     // 'male' | 'female'
+  clothes: 0,         // index into CLOTHES
+  name: '',
+  language: 'zh',     // 'zh' | 'en'
+};
+
+// Restore saved settings if present
+try {
+  const saved = JSON.parse(localStorage.getItem('mapExplorerSettings') || '{}');
+  Object.assign(settings, saved);
+} catch (_) { /* ignore */ }
+
+function saveSettings() {
+  try { localStorage.setItem('mapExplorerSettings', JSON.stringify(settings)); } catch (_) {}
+}
+
+// ── i18n ──────────────────────────────────────────────────────────────────────
+const I18N = {
+  zh: {
+    settings: '设置', gender: '性别', male: '男', female: '女',
+    clothes: '衣服', name: '名字', language: '语言', close: '关闭',
+    namePlaceholder: '输入名字',
+    pressOpen: '按 F 开启', pressDig: '按 F 挖掘',
+    pressOpenFancy: '按 F 开启精致宝箱', pressPickApple: '按 F 摘苹果',
+    pressPickCherry: '按 F 摘樱花', selectHint: '滚轮/方向键选择 · F 或点击确认',
+    chest:      (g, d) => `宝箱！金币 x${g}  钻石 x${d}  小红花 x1`,
+    fancyChest: (g, d) => `精致宝箱！金币 x${g}  钻石 x${d}  小红花 x2`,
+    apple:      (n)    => `苹果 x${n}`,
+    flower:     (n)    => `小红花 x${n}`,
+  },
+  en: {
+    settings: 'Settings', gender: 'Gender', male: 'Male', female: 'Female',
+    clothes: 'Clothes', name: 'Name', language: 'Language', close: 'Close',
+    namePlaceholder: 'Enter name',
+    pressOpen: 'Press F to open', pressDig: 'Press F to dig',
+    pressOpenFancy: 'Press F to open chest', pressPickApple: 'Press F to pick apple',
+    pressPickCherry: 'Press F to pick blossom', selectHint: 'Wheel/Arrows to choose · F or click',
+    chest:      (g, d) => `Chest! Gold x${g}  Diamond x${d}  Flower x1`,
+    fancyChest: (g, d) => `Fancy chest! Gold x${g}  Diamond x${d}  Flower x2`,
+    apple:      (n)    => `Apple x${n}`,
+    flower:     (n)    => `Flower x${n}`,
+  },
+};
+function t(key, ...args) {
+  const v = I18N[settings.language][key];
+  return typeof v === 'function' ? v(...args) : v;
+}
+
 // ── Input ─────────────────────────────────────────────────────────────────────
+let settingsOpen = false;
 const keys = {};
+function isTyping(e) {
+  return settingsOpen || (e.target && e.target.tagName === 'INPUT');
+}
 window.addEventListener('keydown', e => {
+  if (isTyping(e)) return;
   keys[e.key] = true;
+
+  // F confirms the currently selected interaction
   if ((e.key === 'f' || e.key === 'F') && !e.repeat) {
-    tryOpenChest();
-    tryDigOrOpenFancy();
-    tryPickApple();
+    activateSelected();
+    return;
+  }
+
+  // When 2+ interactions are reachable, arrow keys cycle the selection
+  // (instead of moving), so the player can pick which one they want.
+  if (interactions.length >= 2 && !e.repeat) {
+    const n = interactions.length;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      selIndex = (selIndex - 1 + n) % n; e.preventDefault(); return;
+    }
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      selIndex = (selIndex + 1) % n; e.preventDefault(); return;
+    }
   }
 });
 window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+// Mouse wheel cycles the interaction selection
+canvas.addEventListener('wheel', e => {
+  if (settingsOpen || interactions.length < 2) return;
+  e.preventDefault();
+  const n = interactions.length;
+  selIndex = (selIndex + (e.deltaY > 0 ? 1 : -1) + n) % n;
+}, { passive: false });
+
+// Click directly on an interaction icon to select + activate it,
+// or click anywhere on the map to walk there.
+let interactionRects = []; // {x, y, w, h, index} in screen space, set during draw
+let movePath   = [];       // queue of {col, row} tiles for click-to-move
+let moveTarget = null;     // {col, row, t} destination marker for drawing
+canvas.addEventListener('click', e => {
+  if (settingsOpen) return;
+
+  // 1) interaction icon?
+  for (const r of interactionRects) {
+    if (e.clientX >= r.x && e.clientX <= r.x + r.w &&
+        e.clientY >= r.y && e.clientY <= r.y + r.h) {
+      selIndex = r.index;
+      activateSelected();
+      return;
+    }
+  }
+
+  // 2) otherwise, walk to the clicked tile
+  const rect = canvas.getBoundingClientRect();
+  const wx = (e.clientX - rect.left) + Math.round(camX);
+  const wy = (e.clientY - rect.top)  + Math.round(camY);
+  const tc = Math.floor(wx / TILE), tr = Math.floor(wy / TILE);
+  const sc = player.moving ? player.targetCol : player.col;
+  const sr = player.moving ? player.targetRow : player.row;
+  const path = findPath(sc, sr, tc, tr);
+  if (path.length) {
+    movePath   = path;
+    moveTarget = { col: tc, row: tr, t: 40 };
+  }
+});
 
 // ── Walkability ───────────────────────────────────────────────────────────────
 function isWalkable(r, c) {
@@ -313,52 +439,116 @@ function isWalkable(r, c) {
   return t !== T.TREE && t !== T.PINE && t !== T.PALM && t !== T.CHERRY && t !== T.APPLE;
 }
 
-// ── Chest interactions ────────────────────────────────────────────────────────
-function tryOpenChest() {
+// ── Pathfinding (BFS over walkable tiles) ──────────────────────────────────────
+function findPath(sc, sr, tc, tr) {
+  if (tc < 0 || tc >= COLS || tr < 0 || tr >= ROWS) return [];
+  if (sc === tc && sr === tr) return [];
+  if (!isWalkable(tr, tc)) return [];
+
+  const key   = (c, r) => r * COLS + c;
+  const seen  = new Uint8Array(COLS * ROWS);
+  const prev  = new Int32Array(COLS * ROWS).fill(-1);
+  const dirs  = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const q     = [[sc, sr]];
+  let head    = 0;
+  seen[key(sc, sr)] = 1;
+  let found = false;
+
+  while (head < q.length) {
+    const [c, r] = q[head++];
+    if (c === tc && r === tr) { found = true; break; }
+    for (const [dc, dr] of dirs) {
+      const nc = c + dc, nr = r + dr;
+      if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
+      const k = key(nc, nr);
+      if (seen[k] || !isWalkable(nr, nc)) continue;
+      seen[k] = 1;
+      prev[k] = key(c, r);
+      q.push([nc, nr]);
+    }
+  }
+  if (!found) return [];
+
+  const path    = [];
+  const startK  = key(sc, sr);
+  let cur       = key(tc, tr);
+  while (cur !== startK) {
+    path.push({ col: cur % COLS, row: Math.floor(cur / COLS) });
+    cur = prev[cur];
+  }
+  path.reverse();
+  return path;
+}
+
+// ── Interaction actions ───────────────────────────────────────────────────────
+const near = (o) => Math.max(Math.abs(o.col - player.col), Math.abs(o.row - player.row)) <= 1;
+
+function doOpenChest(ch) {
+  ch.open = true;
+  ch.disappearTimer = 240;
+  const gold    = Math.floor(Math.random() * 10) + 1;
+  const diamond = Math.floor(Math.random() * 10) + 1;
+  inventory.gold      += gold;
+  inventory.diamond   += diamond;
+  inventory.redflower += 1;
+  lootMessage = { text: t('chest', gold, diamond), timer: 200 };
+}
+
+function doDig() { digSpot.dug = true; }
+
+function doOpenFancy() {
+  digSpot.chestOpen     = true;
+  digSpot.disappearTimer = 240;
+  const gold    = Math.floor(Math.random() * 13) + 3;
+  const diamond = Math.floor(Math.random() * 13) + 3;
+  inventory.gold      += gold;
+  inventory.diamond   += diamond;
+  inventory.redflower += 2;
+  lootMessage = { text: t('fancyChest', gold, diamond), timer: 240 };
+}
+
+function doPickApple(at) {
+  at.picked = true;
+  inventory.apple += at.count;
+  lootMessage = { text: t('apple', at.count), timer: 180 };
+  renderTreeCanvas();
+}
+
+function doPickCherry(ct) {
+  ct.flowers--;
+  inventory.redflower += 1;
+  lootMessage = { text: t('flower', 1), timer: 180 };
+}
+
+// Build the list of interactions the player can currently reach.
+// Each entry: { icon, label, act }
+function buildInteractions() {
+  const list = [];
   for (const ch of chests) {
-    if (ch.open) continue;
-    const d = Math.max(Math.abs(ch.col - player.col), Math.abs(ch.row - player.row));
-    if (d <= 1) {
-      ch.open = true;
-      ch.disappearTimer = 240;
-      const gold    = Math.floor(Math.random() * 10) + 1;
-      const diamond = Math.floor(Math.random() * 10) + 1;
-      inventory.gold      += gold;
-      inventory.diamond   += diamond;
-      inventory.redflower += 1;
-      lootMessage = { text: `宝箱！金币 x${gold}  钻石 x${diamond}  小红花 x1`, timer: 200 };
-      return;
-    }
+    if (!ch.open && near(ch)) list.push({ icon: '💰', label: t('pressOpen'), act: () => doOpenChest(ch) });
   }
-}
-
-function tryDigOrOpenFancy() {
-  const d = Math.max(Math.abs(digSpot.col - player.col), Math.abs(digSpot.row - player.row));
-  if (d > 1) return;
-  if (!digSpot.dug) { digSpot.dug = true; return; }
-  if (!digSpot.chestOpen) {
-    digSpot.chestOpen     = true;
-    digSpot.disappearTimer = 240;
-    const gold    = Math.floor(Math.random() * 13) + 3;
-    const diamond = Math.floor(Math.random() * 13) + 3;
-    inventory.gold      += gold;
-    inventory.diamond   += diamond;
-    inventory.redflower += 2;
-    lootMessage = { text: `精致宝箱！金币 x${gold}  钻石 x${diamond}  小红花 x2`, timer: 240 };
+  if (near(digSpot)) {
+    if (!digSpot.dug)            list.push({ icon: '⛏️', label: t('pressDig'),       act: doDig });
+    else if (!digSpot.chestOpen) list.push({ icon: '🎁', label: t('pressOpenFancy'), act: doOpenFancy });
   }
-}
-
-function tryPickApple() {
   for (const at of appleTrees) {
-    if (at.picked) continue;
-    const d = Math.max(Math.abs(at.col - player.col), Math.abs(at.row - player.row));
-    if (d <= 1) {
-      at.picked = true;
-      inventory.apple += at.count;
-      lootMessage = { text: `苹果 x${at.count}`, timer: 180 };
-      renderTreeCanvas();
-      return;
-    }
+    if (!at.picked && near(at)) list.push({ icon: '🍎', label: t('pressPickApple'), act: () => doPickApple(at) });
+  }
+  for (const ct of cherryTrees) {
+    if (ct.flowers > 0 && near(ct)) list.push({ icon: '🌸', label: t('pressPickCherry'), act: () => doPickCherry(ct) });
+  }
+  return list;
+}
+
+// Live interaction state (rebuilt every frame in update())
+let interactions = [];
+let selIndex = 0;
+
+function activateSelected() {
+  if (interactions[selIndex]) {
+    interactions[selIndex].act();
+    interactions = buildInteractions();
+    if (selIndex >= interactions.length) selIndex = Math.max(0, interactions.length - 1);
   }
 }
 
@@ -576,6 +766,8 @@ function drawFlower(g, x, y, type) {
 // ── Player drawing ────────────────────────────────────────────────────────────
 function drawPlayer(g, x, y, frame, facing) {
   const bob = frame === 1 ? 1 : 0;
+  const outfit = CLOTHES[settings.clothes] || CLOTHES[0];
+  const female = settings.gender === 'female';
 
   // shadow
   g.fillStyle = 'rgba(0,0,0,0.18)';
@@ -584,7 +776,7 @@ function drawPlayer(g, x, y, frame, facing) {
   g.fill();
 
   // legs
-  g.fillStyle = '#1a3880';
+  g.fillStyle = outfit.legs;
   if (facing === 'left' || facing === 'right') {
     g.fillRect(x + (frame ? 9 : 12), y + 26 + bob, 5, 7);
     g.fillRect(x + (frame ? 18 : 15), y + 24 + bob, 5, 7);
@@ -594,12 +786,22 @@ function drawPlayer(g, x, y, frame, facing) {
     g.fillRect(x + 18, y + 26 + bob + (frame ? 0 : -2), 5, 7);
   }
 
-  // body
-  g.fillStyle = '#2a5abf';
-  g.fillRect(x + 8, y + 15 + bob, 16, 14);
+  // body (dress flares out for female)
+  g.fillStyle = outfit.body;
+  if (female) {
+    g.beginPath();
+    g.moveTo(x + 8,  y + 15 + bob);
+    g.lineTo(x + 24, y + 15 + bob);
+    g.lineTo(x + 27, y + 29 + bob);
+    g.lineTo(x + 5,  y + 29 + bob);
+    g.closePath();
+    g.fill();
+  } else {
+    g.fillRect(x + 8, y + 15 + bob, 16, 14);
+  }
 
   // arms
-  g.fillStyle = '#2a5abf';
+  g.fillStyle = outfit.body;
   if (facing === 'left') {
     g.fillRect(x + 2,  y + 16 + bob, 6, 10);
     g.fillRect(x + 24, y + 18 + bob, 6, 8);
@@ -611,19 +813,43 @@ function drawPlayer(g, x, y, frame, facing) {
     g.fillRect(x + 24, y + 17 + bob, 6, 9);
   }
 
-  // head
-  g.fillStyle = '#f0c890';
-  g.fillRect(x + 9, y + 4 + bob, 14, 13);
+  // ── Head, hair & face (facing-aware) ──────────────────────────────────────
+  const hairColor = female ? '#7a4a18' : '#5828a0';
 
-  // hair / hat
-  g.fillStyle = '#5828a0';
-  g.fillRect(x + 9,  y + 1 + bob, 14, 5);
-  g.fillRect(x + 7,  y + 3 + bob, 2,  7);
-  g.fillRect(x + 23, y + 3 + bob, 2,  7);
-  g.fillRect(x + 7,  y + 1 + bob, 18, 3);
+  if (facing === 'up') {
+    // Back of the head — we see hair, not the face
+    g.fillStyle = hairColor;
+    if (female) {
+      g.fillRect(x + 6, y + 2 + bob, 20, 9);    // back of head
+      g.fillRect(x + 7, y + 9 + bob, 18, 18);   // long hair cascading down the back
+      g.fillStyle = 'rgba(0,0,0,0.12)';         // strand seams for depth
+      g.fillRect(x + 16, y + 11 + bob, 1, 15);
+      g.fillRect(x + 11, y + 12 + bob, 1, 12);
+      g.fillRect(x + 21, y + 12 + bob, 1, 12);
+    } else {
+      g.fillRect(x + 8, y + 2 + bob, 16, 15);   // back of head
+      g.fillStyle = 'rgba(0,0,0,0.12)';
+      g.fillRect(x + 8, y + 14 + bob, 16, 2);   // nape shadow
+    }
+  } else {
+    // Face visible (front or side)
+    g.fillStyle = '#f0c890';
+    g.fillRect(x + 9, y + 4 + bob, 14, 13);
 
-  // eyes
-  if (facing !== 'up') {
+    g.fillStyle = hairColor;
+    if (female) {
+      g.fillRect(x + 6,  y + 1 + bob, 20, 4);   // crown
+      g.fillRect(x + 6,  y + 3 + bob, 3,  19);  // left length down past shoulder
+      g.fillRect(x + 23, y + 3 + bob, 3,  19);  // right length down past shoulder
+      g.fillRect(x + 9,  y + 4 + bob, 14, 2);   // fringe
+    } else {
+      g.fillRect(x + 9,  y + 1 + bob, 14, 5);
+      g.fillRect(x + 7,  y + 3 + bob, 2,  7);
+      g.fillRect(x + 23, y + 3 + bob, 2,  7);
+      g.fillRect(x + 7,  y + 1 + bob, 18, 3);
+    }
+
+    // eyes
     g.fillStyle = '#1a1a28';
     g.fillRect(x + 11, y + 9 + bob, 3, 3);
     g.fillRect(x + 18, y + 9 + bob, 3, 3);
@@ -1022,6 +1248,10 @@ function update() {
   tick++;
   updatePonds();
 
+  // Refresh reachable interactions and keep the selection cursor in range
+  interactions = buildInteractions();
+  if (selIndex >= interactions.length) selIndex = Math.max(0, interactions.length - 1);
+
   // Chest fade-out timers
   for (const ch of chests) {
     if (ch.open && ch.disappearTimer > 0) ch.disappearTimer--;
@@ -1044,16 +1274,30 @@ function update() {
     }
     if (++player.frameTimer >= 8) { player.frame = (player.frame + 1) % 2; player.frameTimer = 0; }
   } else {
-    const up    = keys['w'] || keys['W'] || keys['ArrowUp'];
-    const down  = keys['s'] || keys['S'] || keys['ArrowDown'];
-    const left  = keys['a'] || keys['A'] || keys['ArrowLeft'];
-    const right = keys['d'] || keys['D'] || keys['ArrowRight'];
+    // When 2+ interactions are reachable, arrow keys steer the selector,
+    // so only WASD moves the player in that case.
+    const arrowsMove = interactions.length < 2;
+    const up    = keys['w'] || keys['W'] || (arrowsMove && keys['ArrowUp']);
+    const down  = keys['s'] || keys['S'] || (arrowsMove && keys['ArrowDown']);
+    const left  = keys['a'] || keys['A'] || (arrowsMove && keys['ArrowLeft']);
+    const right = keys['d'] || keys['D'] || (arrowsMove && keys['ArrowRight']);
 
     let dr = 0, dc = 0;
     if (up)        dr = -1;
     else if (down) dr =  1;
     if (left)       dc = -1;
     else if (right) dc =  1;
+
+    if (dr !== 0 || dc !== 0) {
+      // Keyboard input cancels any active click-to-move path
+      movePath = [];
+      moveTarget = null;
+    } else if (movePath.length) {
+      // Follow the click-to-move path one tile at a time
+      const next = movePath.shift();
+      dc = Math.sign(next.col - player.col);
+      dr = Math.sign(next.row - player.row);
+    }
 
     if      (dc < 0) player.facing = 'left';
     else if (dc > 0) player.facing = 'right';
@@ -1071,8 +1315,12 @@ function update() {
       player.moving    = true;
     } else {
       player.frame = 0;
+      if (dr !== 0 || dc !== 0) { movePath = []; moveTarget = null; } // blocked: abandon path
     }
   }
+
+  if (moveTarget && moveTarget.t > 0) moveTarget.t--;
+  if (movePath.length === 0 && moveTarget && moveTarget.t <= 0) moveTarget = null;
 
   updateCamera();
 }
@@ -1142,6 +1390,24 @@ function draw() {
   // Bridges (under player)
   for (const p of ponds) if (p.grow > 0) drawBridge(p);
 
+  // Click-to-move destination marker
+  if (moveTarget && (movePath.length || moveTarget.t > 0)) {
+    const mx = moveTarget.col * TILE + 16, my = moveTarget.row * TILE + 16;
+    const pulse = 0.5 + 0.5 * Math.sin(tick * 0.2);
+    ctx.save();
+    ctx.globalAlpha = 0.5 + 0.4 * pulse;
+    ctx.strokeStyle = '#ffd84d';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(mx, my, 6 + 3 * pulse, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,216,77,0.85)';
+    ctx.beginPath();
+    ctx.arc(mx, my, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   // ── Regular chests ────────────────────────────────────────────────────────
   for (const ch of chests) {
     if (ch.open && ch.disappearTimer <= 0) continue;
@@ -1152,24 +1418,6 @@ function draw() {
     ctx.globalAlpha = chAlpha;
     drawChest(x, y, ch.open);
     ctx.restore();
-    if (!ch.open) {
-      const d = Math.max(Math.abs(ch.col - player.col), Math.abs(ch.row - player.row));
-      if (d <= 1) {
-        ctx.save();
-        ctx.font         = '600 11px ' + UI_FONT;
-        ctx.textAlign    = 'center';
-        ctx.textBaseline = 'middle';
-        const label = '按 F 开启';
-        const pw = ctx.measureText(label).width + 18, ph = 18;
-        roundRectPath(ctx, x + 16 - pw / 2, y - 22, pw, ph, ph / 2);
-        ctx.fillStyle   = 'rgba(28,28,30,0.9)'; ctx.fill();
-        ctx.lineWidth   = 1;
-        ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.stroke();
-        ctx.fillStyle   = '#ffd84d';
-        ctx.fillText(label, x + 16, y - 22 + ph / 2 + 1);
-        ctx.restore();
-      }
-    }
   }
 
   // ── Dig spot ──────────────────────────────────────────────────────────────
@@ -1182,60 +1430,6 @@ function draw() {
       ctx.save();
       ctx.globalAlpha = digAlpha;
       drawFancyChest(digSpot.col * TILE, digSpot.row * TILE - 4, digSpot.chestOpen);
-      ctx.restore();
-    }
-  } else {
-    const dd = Math.max(Math.abs(digSpot.col - player.col), Math.abs(digSpot.row - player.row));
-    if (dd <= 1) {
-      ctx.save();
-      const label = '按 F 挖掘';
-      ctx.font = '600 11px ' + UI_FONT;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      const pw = ctx.measureText(label).width + 18, ph = 18;
-      const lx = digSpot.col * TILE + 16, ly = digSpot.row * TILE - 22;
-      roundRectPath(ctx, lx - pw / 2, ly, pw, ph, ph / 2);
-      ctx.fillStyle = 'rgba(28,28,30,0.9)'; ctx.fill();
-      ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.stroke();
-      ctx.fillStyle = '#ffd84d';
-      ctx.fillText(label, lx, ly + ph / 2 + 1);
-      ctx.restore();
-    }
-  }
-  if (digSpot.dug && !digSpot.chestOpen) {
-    const dd = Math.max(Math.abs(digSpot.col - player.col), Math.abs(digSpot.row - player.row));
-    if (dd <= 1) {
-      ctx.save();
-      const label = '按 F 开启精致宝箱';
-      ctx.font = '600 11px ' + UI_FONT;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      const pw = ctx.measureText(label).width + 18, ph = 18;
-      const lx = digSpot.col * TILE + 16, ly = digSpot.row * TILE - 22;
-      roundRectPath(ctx, lx - pw / 2, ly, pw, ph, ph / 2);
-      ctx.fillStyle = 'rgba(28,28,30,0.9)'; ctx.fill();
-      ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.stroke();
-      ctx.fillStyle = '#ffd84d';
-      ctx.fillText(label, lx, ly + ph / 2 + 1);
-      ctx.restore();
-    }
-  }
-
-  // ── Apple trees ───────────────────────────────────────────────────────────
-  for (const at of appleTrees) {
-    if (at.picked) continue;
-    if (at.col < startC || at.col >= endC || at.row < startR || at.row >= endR) continue;
-    const d = Math.max(Math.abs(at.col - player.col), Math.abs(at.row - player.row));
-    if (d <= 1) {
-      ctx.save();
-      const label = '按 F 摘苹果';
-      ctx.font = '600 11px ' + UI_FONT;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      const pw = ctx.measureText(label).width + 18, ph = 18;
-      const lx = at.col * TILE + 16, ly = at.row * TILE - 22;
-      roundRectPath(ctx, lx - pw / 2, ly, pw, ph, ph / 2);
-      ctx.fillStyle = 'rgba(28,28,30,0.9)'; ctx.fill();
-      ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.stroke();
-      ctx.fillStyle = '#ffd84d';
-      ctx.fillText(label, lx, ly + ph / 2 + 1);
       ctx.restore();
     }
   }
@@ -1268,9 +1462,86 @@ function draw() {
   // ── Rainbows (topmost world layer) ────────────────────────────────────────
   for (const p of ponds) if (p.rainbowAnim > 0) drawRainbow(p);
 
+  // ── Player name tag ───────────────────────────────────────────────────────
+  if (settings.name) {
+    ctx.save();
+    ctx.font         = '600 11px ' + UI_FONT;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(settings.name).width + 14, th = 16;
+    const lx = px + 16, ly = py - 14;
+    roundRectPath(ctx, lx - tw / 2, ly, tw, th, th / 2);
+    ctx.fillStyle   = 'rgba(28,28,30,0.82)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle   = '#ffffff';
+    ctx.fillText(settings.name, lx, ly + th / 2 + 1);
+    ctx.restore();
+  }
+
   ctx.restore();
 
   drawHUD();
+  drawInteractionBar();
+}
+
+// ── Interaction selection bar (screen space, above the player) ────────────────
+function drawInteractionBar() {
+  interactionRects = [];
+  const n = interactions.length;
+  if (n === 0) return;
+
+  const sel = interactions[selIndex];
+  const psx = Math.round(player.px) - Math.round(camX) + 16; // player centre x (screen)
+  const psy = Math.round(player.py) - Math.round(camY);      // player top y (screen)
+
+  const chip = 30, gap = 6;
+  const totalW = n * chip + (n - 1) * gap;
+  const labelY = psy - 28;
+  const iconsY = labelY - 6 - chip;
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Icon chips
+  let cx = Math.round(psx - totalW / 2);
+  for (let i = 0; i < n; i++) {
+    const on = i === selIndex;
+    roundRectPath(ctx, cx, iconsY, chip, chip, 8);
+    ctx.fillStyle   = on ? 'rgba(255,216,77,0.95)' : 'rgba(28,28,30,0.9)';
+    ctx.fill();
+    ctx.lineWidth   = on ? 2 : 1;
+    ctx.strokeStyle = on ? '#ffffff' : 'rgba(255,255,255,0.18)';
+    ctx.stroke();
+    ctx.font      = '18px ' + UI_FONT;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(interactions[i].icon, cx + chip / 2, iconsY + chip / 2 + 1);
+    interactionRects.push({ x: cx, y: iconsY, w: chip, h: chip, index: i });
+    cx += chip + gap;
+  }
+
+  // Selected label
+  ctx.font = '600 12px ' + UI_FONT;
+  const lw = ctx.measureText(sel.label).width + 16, lh = 18;
+  roundRectPath(ctx, psx - lw / 2, labelY, lw, lh, lh / 2);
+  ctx.fillStyle   = 'rgba(28,28,30,0.92)'; ctx.fill();
+  ctx.lineWidth   = 1; ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.stroke();
+  ctx.fillStyle   = '#ffd84d';
+  ctx.fillText(sel.label, psx, labelY + lh / 2 + 1);
+
+  // Hint when there is a choice to make
+  if (n >= 2) {
+    const hint = t('selectHint');
+    ctx.font = '500 10px ' + UI_FONT;
+    const hw = ctx.measureText(hint).width + 14, hh = 15;
+    const hy = iconsY - 4 - hh;
+    roundRectPath(ctx, psx - hw / 2, hy, hw, hh, hh / 2);
+    ctx.fillStyle = 'rgba(28,28,30,0.78)'; ctx.fill();
+    ctx.fillStyle = '#c8c8cc';
+    ctx.fillText(hint, psx, hy + hh / 2 + 1);
+  }
+
+  ctx.restore();
 }
 
 // ── Game loop ─────────────────────────────────────────────────────────────────
@@ -1279,6 +1550,73 @@ function loop() {
   draw();
   requestAnimationFrame(loop);
 }
+
+// ── Settings UI wiring ────────────────────────────────────────────────────────
+const settingsBtn   = document.getElementById('settingsBtn');
+const settingsModal = document.getElementById('settingsModal');
+const genderSeg     = document.getElementById('genderSeg');
+const langSeg       = document.getElementById('langSeg');
+const clothesWrap   = document.getElementById('clothesSwatches');
+const nameInput     = document.getElementById('nameInput');
+const closeBtn      = document.getElementById('closeBtn');
+
+// Build clothes swatches
+CLOTHES.forEach((c, i) => {
+  const b = document.createElement('button');
+  b.style.background = c.body;
+  b.dataset.clothes = i;
+  b.addEventListener('click', () => { settings.clothes = i; refreshSettingsUI(); saveSettings(); });
+  clothesWrap.appendChild(b);
+});
+
+genderSeg.querySelectorAll('button').forEach(b => {
+  b.addEventListener('click', () => { settings.gender = b.dataset.gender; refreshSettingsUI(); saveSettings(); });
+});
+langSeg.querySelectorAll('button').forEach(b => {
+  b.addEventListener('click', () => { settings.language = b.dataset.lang; refreshSettingsUI(); saveSettings(); });
+});
+nameInput.addEventListener('input', () => { settings.name = nameInput.value; saveSettings(); });
+
+function applyLanguageLabels() {
+  document.getElementById('stTitle').textContent        = t('settings');
+  document.getElementById('stGenderLabel').textContent  = t('gender');
+  document.getElementById('stClothesLabel').textContent = t('clothes');
+  document.getElementById('stNameLabel').textContent    = t('name');
+  document.getElementById('stLangLabel').textContent    = t('language');
+  closeBtn.textContent          = t('close');
+  nameInput.placeholder         = t('namePlaceholder');
+  genderSeg.querySelector('[data-gender="male"]').textContent   = t('male');
+  genderSeg.querySelector('[data-gender="female"]').textContent = t('female');
+  settingsBtn.title = t('settings');
+}
+
+function refreshSettingsUI() {
+  genderSeg.querySelectorAll('button').forEach(b =>
+    b.classList.toggle('active', b.dataset.gender === settings.gender));
+  langSeg.querySelectorAll('button').forEach(b =>
+    b.classList.toggle('active', b.dataset.lang === settings.language));
+  clothesWrap.querySelectorAll('button').forEach(b =>
+    b.classList.toggle('active', Number(b.dataset.clothes) === settings.clothes));
+  if (nameInput.value !== settings.name) nameInput.value = settings.name;
+  applyLanguageLabels();
+}
+
+function openSettings() {
+  settingsOpen = true;
+  for (const k in keys) keys[k] = false; // release held movement keys
+  refreshSettingsUI();
+  settingsModal.classList.remove('hidden');
+}
+function closeSettings() {
+  settingsOpen = false;
+  settingsModal.classList.add('hidden');
+}
+
+settingsBtn.addEventListener('click', openSettings);
+closeBtn.addEventListener('click', closeSettings);
+settingsModal.addEventListener('click', e => { if (e.target === settingsModal) closeSettings(); });
+
+refreshSettingsUI();
 
 renderStaticMap();
 loop();
