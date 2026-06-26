@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find \"C:\\\\Users\\\\ycd_1\\\\.cursor\" -name \"*.js\" 2>/dev/null | head -10 *)",
+      "Read(//c/Users/ycd_1/.cursor/**)",
+      "Read(//c/Users/ycd_1/.windsurf/**)",
+      "Read(//c/Users/ycd_1/.trae/**)",
+      "Bash(xargs wc -l)"
+    ]
+  }
+}
