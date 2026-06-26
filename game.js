@@ -13,7 +13,7 @@ resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
 
 // ── Tile types ───────────────────────────────────────────────────────────────
-const T = { GRASS: 0, TREE: 1, WATER: 2, SAND: 3, PINE: 4, PALM: 5 };
+const T = { GRASS: 0, TREE: 1, WATER: 2, SAND: 3, PINE: 4, PALM: 5, CHERRY: 6, APPLE: 7 };
 
 // ── Colour palettes ──────────────────────────────────────────────────────────
 const GRASS_COLORS = ['#4a7c3f', '#4f8444', '#558b48', '#4a7c3f', '#527f42'];
@@ -47,7 +47,7 @@ const chests = [
 const chestMap = {};
 for (const ch of chests) chestMap[`${ch.col},${ch.row}`] = ch;
 
-const inventory  = { gold: 0, diamond: 0, redflower: 0 };
+const inventory  = { gold: 0, diamond: 0, redflower: 0, apple: 0 };
 let   lootMessage = null; // { text, timer }
 
 const digSpot = { col: Math.floor(64 / 2), row: 35, dug: false, chestOpen: false };
@@ -90,18 +90,6 @@ function monumentXBoundsAt(worldY) {
   const t = (worldY - shaftTopY) / (MON_TOP - shaftTopY);
   return { left: cx - TW * (1 - t), right: cx + TW * (1 - t) };
 }
-
-// ── Shanghai Enchanted Storybook Castle ───────────────────────────────────────
-const CASTLE_CX   = 16 * TILE + TILE / 2;  // world x = 528
-const CASTLE_BASE = MON_BASE_BOTTOM;
-
-const castleBlocked = {};
-for (let c = 10; c <= 22; c++) {
-  for (let r = 31; r <= 33; r++) castleBlocked[`${c},${r}`] = true;
-}
-
-const castleImg = new Image();
-castleImg.src   = 'castle_clean.png';
 
 // ── RNG helper ────────────────────────────────────────────────────────────────
 function rng(x, y, s) {
@@ -177,6 +165,7 @@ function buildMap() {
       const dist  = rng(i, cl.cy, cl.cx) * 5;
       const c = Math.round(cl.cx + Math.cos(angle) * dist);
       const r = Math.round(cl.cy + Math.sin(angle) * dist);
+      if (rng(i, cl.cx + 7, cl.cy + 13) < 0.5) continue; // thin out ~half the round trees
       if (r >= 0 && r < ROWS && c >= 0 && c < COLS && map[r][c] === T.GRASS)
         map[r][c] = T.TREE;
     }
@@ -216,6 +205,21 @@ function buildMap() {
     }
   }
 
+  // Cherry blossom trees (random scatter across map)
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (map[r][c] !== T.GRASS) continue;
+      if (rng(c, r, 88) < 0.005) map[r][c] = T.CHERRY;
+    }
+  }
+
+  // Convert 20% of deciduous trees to apple trees
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (map[r][c] === T.TREE && rng(c, r, 66) < 0.2) map[r][c] = T.APPLE;
+    }
+  }
+
   // Keep chest tiles clear
   for (const ch of chests) {
     if (map[ch.row][ch.col] !== T.GRASS) map[ch.row][ch.col] = T.GRASS;
@@ -227,36 +231,27 @@ function buildMap() {
     map[r][c] = T.GRASS;
   }
 
-  // Keep castle area clear (cols 8-25, rows 27-34)
-  for (let c = 8; c <= 25; c++) {
-    for (let r = 27; r <= 34; r++) {
-      if (map[r][c] !== T.GRASS) map[r][c] = T.GRASS;
-    }
-  }
-
   // Scatter flowers and sunflowers on grass
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       if (map[r][c] !== T.GRASS) continue;
       if (chestMap[`${c},${r}`])       continue;
       if (monumentBlocked[`${c},${r}`]) continue;
-      if (castleBlocked[`${c},${r}`])   continue;
       const v = rng(c, r, 42);
-      if      (v < 0.03) decorations.push({ col: c, row: r, type: 'sunflower' });
-      else if (v < 0.09) decorations.push({ col: c, row: r, type: 'flower' });
+      if      (v < 0.015) decorations.push({ col: c, row: r, type: 'sunflower' });
+      else if (v < 0.09)  decorations.push({ col: c, row: r, type: 'flower' });
     }
   }
 
   // Initialise bridge tiles for each pond
   for (const p of ponds) {
     const tiles = [];
-    // North-south bridge through pond centre column
     const southRow = p.cy + Math.ceil(p.ry);
-    const northRow = p.cy - Math.ceil(p.ry);
-    for (let r = southRow; r >= northRow; r--) {
+    for (let r = southRow; r >= p.cy; r--) {
       tiles.push({ col: p.cx, row: r });
     }
     p.bridge      = tiles;
+    p.southRow    = southRow;
     p.grow        = 0;
     p.rainbow     = false;
     p.rainbowAnim = 0;
@@ -265,6 +260,20 @@ function buildMap() {
   }
 }
 buildMap();
+
+// ── Apple tree data ───────────────────────────────────────────────────────────
+const appleTrees = [];
+const appleTreeMap = {};
+for (let r = 0; r < ROWS; r++) {
+  for (let c = 0; c < COLS; c++) {
+    if (map[r][c] === T.APPLE) {
+      const count = Math.floor(rng(c, r, 99) * 3) + 1; // 1, 2, or 3 apples
+      const at = { col: c, row: r, picked: false, count };
+      appleTrees.push(at);
+      appleTreeMap[`${c},${r}`] = at;
+    }
+  }
+}
 
 // ── Player ────────────────────────────────────────────────────────────────────
 const SPEED = 3;
@@ -285,6 +294,7 @@ window.addEventListener('keydown', e => {
   if ((e.key === 'f' || e.key === 'F') && !e.repeat) {
     tryOpenChest();
     tryDigOrOpenFancy();
+    tryPickApple();
   }
 });
 window.addEventListener('keyup', e => { keys[e.key] = false; });
@@ -295,13 +305,12 @@ function isWalkable(r, c) {
   const _mapCh = chestMap[`${c},${r}`];
   if (_mapCh && !_mapCh.open)        return false;
   if (monumentBlocked[`${c},${r}`])  return false;
-  if (castleBlocked[`${c},${r}`])    return false;
   const t = map[r][c];
   if (t === T.WATER) {
     const b = bridgeTileIndex[`${c},${r}`];
     return !!(b && b.pond.grow >= b.index + 1);
   }
-  return t !== T.TREE && t !== T.PINE && t !== T.PALM;
+  return t !== T.TREE && t !== T.PINE && t !== T.PALM && t !== T.CHERRY && t !== T.APPLE;
 }
 
 // ── Chest interactions ────────────────────────────────────────────────────────
@@ -336,6 +345,20 @@ function tryDigOrOpenFancy() {
     inventory.diamond   += diamond;
     inventory.redflower += 2;
     lootMessage = { text: `精致宝箱！金币 x${gold}  钻石 x${diamond}  小红花 x2`, timer: 240 };
+  }
+}
+
+function tryPickApple() {
+  for (const at of appleTrees) {
+    if (at.picked) continue;
+    const d = Math.max(Math.abs(at.col - player.col), Math.abs(at.row - player.row));
+    if (d <= 1) {
+      at.picked = true;
+      inventory.apple += at.count;
+      lootMessage = { text: `苹果 x${at.count}`, timer: 180 };
+      renderTreeCanvas();
+      return;
+    }
   }
 }
 
@@ -385,50 +408,50 @@ function drawSand(g, x, y, s) {
 function drawTree(g, x, y) {
   // trunk
   g.fillStyle = '#5a3a1a';
-  g.fillRect(x + 13, y + 20, 6, 14);
+  g.fillRect(x + 13, y + 16, 6, 16);
   // shadow canopy
   g.fillStyle = '#264820';
   g.beginPath();
-  g.arc(x + 16, y + 16, 14, 0, Math.PI * 2);
+  g.arc(x + 16, y + 4, 22, 0, Math.PI * 2);
   g.fill();
   // mid canopy
   g.fillStyle = '#3a6e2c';
   g.beginPath();
-  g.arc(x + 14, y + 14, 12, 0, Math.PI * 2);
+  g.arc(x + 13, y + 1, 19, 0, Math.PI * 2);
   g.fill();
   // highlight
   g.fillStyle = '#4e8838';
   g.beginPath();
-  g.arc(x + 12, y + 11, 7, 0, Math.PI * 2);
+  g.arc(x + 9, y - 5, 12, 0, Math.PI * 2);
   g.fill();
 }
 
 function drawPineTree(g, x, y) {
   // trunk
   g.fillStyle = '#5a3a1a';
-  g.fillRect(x + 14, y + 24, 4, 10);
+  g.fillRect(x + 14, y + 18, 4, 14);
   // bottom tier
   g.fillStyle = '#1e4a1a';
   g.beginPath();
-  g.moveTo(x + 16, y + 6);
-  g.lineTo(x + 2,  y + 28);
-  g.lineTo(x + 30, y + 28);
+  g.moveTo(x + 16, y - 16);
+  g.lineTo(x + 2,  y + 20);
+  g.lineTo(x + 30, y + 20);
   g.closePath();
   g.fill();
   // upper tier
   g.fillStyle = '#286028';
   g.beginPath();
-  g.moveTo(x + 16, y + 2);
-  g.lineTo(x + 6,  y + 20);
-  g.lineTo(x + 26, y + 20);
+  g.moveTo(x + 16, y - 22);
+  g.lineTo(x + 6,  y);
+  g.lineTo(x + 26, y);
   g.closePath();
   g.fill();
   // highlight
   g.fillStyle = '#38803a';
   g.beginPath();
-  g.moveTo(x + 16, y + 2);
-  g.lineTo(x + 11, y + 15);
-  g.lineTo(x + 16, y + 15);
+  g.moveTo(x + 16, y - 22);
+  g.lineTo(x + 11, y - 8);
+  g.lineTo(x + 16, y - 8);
   g.closePath();
   g.fill();
 }
@@ -439,22 +462,83 @@ function drawPalmTree(g, x, y) {
   g.lineWidth = 4;
   g.beginPath();
   g.moveTo(x + 16, y + 32);
-  g.quadraticCurveTo(x + 20, y + 16, x + 18, y + 8);
+  g.quadraticCurveTo(x + 20, y + 14, x + 18, y + 4);
   g.stroke();
   // fronds
-  const fronds = [[-14,-4],[4,-12],[16,-2],[-2,10],[-16,4]];
+  const fronds = [[-16,-5],[6,-14],[20,-3],[-3,12],[-18,5]];
   g.lineWidth = 3;
   for (const [fx, fy] of fronds) {
     g.strokeStyle = '#2a7820';
     g.beginPath();
-    g.moveTo(x + 18, y + 8);
-    g.quadraticCurveTo(x + 18 + fx * 0.5, y + 8 + fy * 0.5, x + 18 + fx, y + 8 + fy);
+    g.moveTo(x + 18, y + 4);
+    g.quadraticCurveTo(x + 18 + fx * 0.5, y + 4 + fy * 0.5, x + 18 + fx, y + 4 + fy);
     g.stroke();
   }
   g.fillStyle = '#7a5020';
   g.beginPath();
-  g.arc(x + 17, y + 10, 2.5, 0, Math.PI * 2);
+  g.arc(x + 17, y + 6, 3, 0, Math.PI * 2);
   g.fill();
+}
+
+function drawCherryTree(g, x, y) {
+  const variant = Math.floor(rng(x, y, 55) * 2);
+  g.fillStyle = '#6b3a2a';
+  g.fillRect(x + 13, y + 16, 6, 16);
+
+  if (variant === 0) {
+    // Round canopy
+    g.fillStyle = '#e8789a';
+    g.beginPath(); g.arc(x + 16, y + 4, 22, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#ffb7c5';
+    g.beginPath(); g.arc(x + 13, y + 1, 19, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#ffe0ea';
+    g.beginPath(); g.arc(x + 9, y - 5, 12, 0, Math.PI * 2); g.fill();
+  } else {
+    // Airy multi-cluster
+    for (const [cx2, cy2, r2] of [[16,4,14],[5,10,11],[27,8,10],[14,-3,10]]) {
+      g.fillStyle = '#e8789a';
+      g.beginPath(); g.arc(x + cx2, y + cy2, r2, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#ffb7c5';
+      g.beginPath(); g.arc(x + cx2 - 2, y + cy2 - 2, r2 - 3, 0, Math.PI * 2); g.fill();
+    }
+  }
+
+  // Scattered petal dots (all variants)
+  g.fillStyle = '#fff0f5';
+  for (const [dx, dy] of [[5,8],[22,10],[8,0],[18,3],[12,14],[25,6]]) {
+    g.beginPath(); g.arc(x + dx, y + dy, 2, 0, Math.PI * 2); g.fill();
+  }
+}
+
+// Apple positions per kind: index 0 → 1 apple, 1 → 2 apples, 2 → 3 apples
+const APPLE_POS = [
+  [[14, 8]],
+  [[8, 6], [20, 10]],
+  [[8, 6], [20, 8], [14, 14]],
+];
+
+function drawAppleTree(g, x, y, count) {
+  // trunk
+  g.fillStyle = '#5a3a1a';
+  g.fillRect(x + 13, y + 16, 6, 16);
+  // canopy (darker, richer green than regular tree)
+  g.fillStyle = '#1e5018';
+  g.beginPath(); g.arc(x + 16, y + 4, 22, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#2e7228';
+  g.beginPath(); g.arc(x + 13, y + 1, 19, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#3e8a38';
+  g.beginPath(); g.arc(x + 9, y - 5, 12, 0, Math.PI * 2); g.fill();
+  if (count > 0) {
+    const positions = APPLE_POS[count - 1];
+    g.fillStyle = '#d42020';
+    for (const [dx, dy] of positions) {
+      g.beginPath(); g.arc(x + dx, y + dy, 3.5, 0, Math.PI * 2); g.fill();
+    }
+    g.fillStyle = '#ff7070';
+    for (const [dx, dy] of positions) {
+      g.beginPath(); g.arc(x + dx - 1, y + dy - 1, 1.5, 0, Math.PI * 2); g.fill();
+    }
+  }
 }
 
 // ── Flower drawing ────────────────────────────────────────────────────────────
@@ -505,8 +589,9 @@ function drawPlayer(g, x, y, frame, facing) {
     g.fillRect(x + (frame ? 9 : 12), y + 26 + bob, 5, 7);
     g.fillRect(x + (frame ? 18 : 15), y + 24 + bob, 5, 7);
   } else {
-    g.fillRect(x + 9,  y + 26 + bob, 5, 7);
-    g.fillRect(x + 18, y + 26 + bob, 5, 7);
+    // walking up/down: alternate which leg steps forward
+    g.fillRect(x + 9,  y + 26 + bob + (frame ? -2 : 0), 5, 7);
+    g.fillRect(x + 18, y + 26 + bob + (frame ? 0 : -2), 5, 7);
   }
 
   // body
@@ -803,18 +888,6 @@ function drawMonument(g) {
   g.fillRect(cx + 3, shaftTopY + 12, 3, 5);
 }
 
-// ── Castle (image sprite) ─────────────────────────────────────────────────────
-function drawDisneyCastle(g) {
-  if (!castleImg.complete || castleImg.naturalWidth === 0) return;
-  const drawH = 340;
-  const drawW = castleImg.naturalWidth * drawH / castleImg.naturalHeight;
-  g.drawImage(castleImg,
-    Math.round(CASTLE_CX - drawW / 2),
-    CASTLE_BASE - drawH,
-    Math.round(drawW),
-    drawH);
-}
-
 // ── Offscreen static layers ───────────────────────────────────────────────────
 const mapCanvas    = document.createElement('canvas');
 mapCanvas.width    = COLS * TILE;
@@ -841,18 +914,26 @@ function renderStaticMap() {
   for (const d of decorations) {
     drawFlower(mctx, d.col * TILE, d.row * TILE, d.type);
   }
-  // Tree overlay
+  // Tree + monument overlay
+  renderTreeCanvas();
+}
+
+function renderTreeCanvas() {
+  tctx.clearRect(0, 0, treeCanvas.width, treeCanvas.height);
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       const t = map[r][c];
-      if      (t === T.TREE) drawTree(tctx, c * TILE, r * TILE);
-      else if (t === T.PINE) drawPineTree(tctx, c * TILE, r * TILE);
-      else if (t === T.PALM) drawPalmTree(tctx, c * TILE, r * TILE);
+      if      (t === T.TREE)   drawTree(tctx, c * TILE, r * TILE);
+      else if (t === T.PINE)   drawPineTree(tctx, c * TILE, r * TILE);
+      else if (t === T.PALM)   drawPalmTree(tctx, c * TILE, r * TILE);
+      else if (t === T.CHERRY) drawCherryTree(tctx, c * TILE, r * TILE);
+      else if (t === T.APPLE)  {
+        const at = appleTreeMap[`${c},${r}`];
+        drawAppleTree(tctx, c * TILE, r * TILE, at && !at.picked ? at.count : 0);
+      }
     }
   }
-  // Monument + castle on overlay
   drawMonument(tctx);
-  drawDisneyCastle(tctx);
 }
 
 // ── Bridge & rainbow drawing ──────────────────────────────────────────────────
@@ -914,16 +995,20 @@ function updateCamera() {
 // ── Pond update ───────────────────────────────────────────────────────────────
 function updatePonds() {
   for (const p of ponds) {
-    const nearPond = (Math.abs(player.col - p.cx) <= p.rx + 2 &&
-                      Math.abs(player.row - p.cy) <= p.ry + 2);
-    const onBridge = !!(bridgeTileIndex[`${player.col},${player.row}`]?.pond === p);
-    if (nearPond || onBridge) {
+    const atEntrance = (Math.abs(player.col - p.cx) <= 1 && Math.abs(player.row - p.southRow) <= 1);
+    const onBridge   = !!(bridgeTileIndex[`${player.col},${player.row}`]?.pond === p);
+    if (atEntrance || onBridge) {
       p.grow = Math.min(p.grow + BRIDGE_RATE, p.bridge.length);
     } else {
       p.grow = Math.max(p.grow - BRIDGE_RATE, 0);
     }
-    if (p.grow >= p.bridge.length - 0.1) p.rainbow = true;
-    if (p.grow < 0.1)                    p.rainbow = false;
+    const onPondWater = (
+      map[player.row][player.col] === T.WATER &&
+      Math.abs(player.col - p.cx) <= p.rx &&
+      Math.abs(player.row - p.cy) <= p.ry
+    );
+    if (player.col === p.cx && player.row === p.cy) p.rainbow = true;
+    if (!onPondWater) p.rainbow = false;
     if (p.rainbow) {
       p.rainbowAnim = Math.min(p.rainbowAnim + RAINBOW_RATE, 1);
     } else {
@@ -997,7 +1082,7 @@ function drawHUD() {
   ctx.save();
 
   // Inventory bar
-  const barW = 230, barH = 34, barX = Math.round(canvas.width / 2 - barW / 2), barY = 10;
+  const barW = 310, barH = 34, barX = Math.round(canvas.width / 2 - barW / 2), barY = 10;
   roundRectPath(ctx, barX, barY, barW, barH, 10);
   ctx.fillStyle = 'rgba(18,18,20,0.88)';
   ctx.fill();
@@ -1009,7 +1094,7 @@ function drawHUD() {
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle    = '#ffd84d';
-  ctx.fillText(`💰 ${inventory.gold}   💎 ${inventory.diamond}   🌸 ${inventory.redflower}`,
+  ctx.fillText(`💰 ${inventory.gold}   💎 ${inventory.diamond}   🌸 ${inventory.redflower}   🍎 ${inventory.apple}`,
     canvas.width / 2, barY + barH / 2 + 1);
 
   // Loot popup
@@ -1134,6 +1219,27 @@ function draw() {
     }
   }
 
+  // ── Apple trees ───────────────────────────────────────────────────────────
+  for (const at of appleTrees) {
+    if (at.picked) continue;
+    if (at.col < startC || at.col >= endC || at.row < startR || at.row >= endR) continue;
+    const d = Math.max(Math.abs(at.col - player.col), Math.abs(at.row - player.row));
+    if (d <= 1) {
+      ctx.save();
+      const label = '按 F 摘苹果';
+      ctx.font = '600 11px ' + UI_FONT;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const pw = ctx.measureText(label).width + 18, ph = 18;
+      const lx = at.col * TILE + 16, ly = at.row * TILE - 22;
+      roundRectPath(ctx, lx - pw / 2, ly, pw, ph, ph / 2);
+      ctx.fillStyle = 'rgba(28,28,30,0.9)'; ctx.fill();
+      ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.stroke();
+      ctx.fillStyle = '#ffd84d';
+      ctx.fillText(label, lx, ly + ph / 2 + 1);
+      ctx.restore();
+    }
+  }
+
   // ── Player ────────────────────────────────────────────────────────────────
   const px = Math.round(player.px), py = Math.round(player.py);
   drawPlayer(ctx, px, py, player.frame, player.facing);
@@ -1174,6 +1280,5 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
-// Start after castle image loads (so treeCanvas has the castle sprite)
-castleImg.onload  = () => { renderStaticMap(); loop(); };
-castleImg.onerror = () => { renderStaticMap(); loop(); }; // fallback if image missing
+renderStaticMap();
+loop();
