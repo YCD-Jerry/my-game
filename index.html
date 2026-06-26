@@ -55,13 +55,13 @@
     .swatches button:hover { transform: scale(1.12); }
     .swatches button.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(255,216,77,0.8); }
 
-    #nameInput {
+    #nameInput, #redeemInput {
       flex: 1 1 auto; min-width: 0;
       background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.16);
       border-radius: 8px; color: #fff; padding: 7px 10px; font-size: 13px;
       font-family: inherit; text-align: right;
     }
-    #nameInput:focus { outline: none; border-color: rgba(255,216,77,0.7); }
+    #nameInput:focus, #redeemInput:focus { outline: none; border-color: rgba(255,216,77,0.7); }
 
     #closeBtn {
       width: 100%; margin-top: 8px; padding: 10px;
@@ -70,6 +70,45 @@
       font-family: inherit;
     }
     #closeBtn:hover { background: #ffe070; }
+
+    /* ── Admin map editor ────────────────────────────────────────── */
+    #adminPanel {
+      position: fixed; top: 64px; right: 12px; z-index: 25;
+      width: 188px; max-height: calc(100vh - 80px); overflow-y: auto;
+      background: rgba(24,24,27,0.96); color: #f0f0f2;
+      border: 1px solid rgba(255,255,255,0.12); border-radius: 14px;
+      padding: 14px; box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+      font-family: -apple-system,"SF Pro Display",system-ui,"Segoe UI",Roboto,Arial,sans-serif;
+    }
+    #adminPanel.hidden { display: none; }
+    #adminPanel h3 { font-size: 15px; margin-bottom: 10px; color: #ffd84d; font-weight: 600; }
+    #brushList { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    #brushList button {
+      display: flex; align-items: center; gap: 7px;
+      border: 1px solid rgba(255,255,255,0.14); border-radius: 8px;
+      background: rgba(255,255,255,0.05); color: #d8d8dc;
+      padding: 7px 8px; font-size: 12px; cursor: pointer;
+      font-family: inherit; transition: background .12s, border-color .12s;
+    }
+    #brushList button:hover { background: rgba(255,255,255,0.1); }
+    #brushList button.active { background: #ffd84d; color: #1a1a1c; border-color: #fff; font-weight: 600; }
+    #brushList button .dot { width: 13px; height: 13px; border-radius: 3px; flex: 0 0 auto; border: 1px solid rgba(0,0,0,0.25); }
+    #adminHint { font-size: 11px; color: #a0a0a6; margin: 10px 0; line-height: 1.4; }
+    #publishBtn {
+      width: 100%; margin-bottom: 6px; padding: 9px; border: 0; border-radius: 8px;
+      cursor: pointer; font-size: 12px; font-weight: 600; font-family: inherit;
+      background: #4a90d9; color: #fff;
+    }
+    #publishBtn:hover { background: #5aa0e9; }
+    .admin-actions { display: flex; gap: 6px; }
+    .admin-actions button {
+      flex: 1 1 0; padding: 8px; border: 0; border-radius: 8px; cursor: pointer;
+      font-size: 12px; font-weight: 600; font-family: inherit;
+    }
+    #resetMapBtn { background: rgba(200,60,60,0.85); color: #fff; }
+    #resetMapBtn:hover { background: rgba(220,70,70,0.95); }
+    #exitAdminBtn { background: rgba(255,255,255,0.14); color: #f0f0f2; }
+    #exitAdminBtn:hover { background: rgba(255,255,255,0.22); }
   </style>
 </head>
 <body>
@@ -107,10 +146,27 @@
         </div>
       </div>
 
+      <div class="row">
+        <label id="stRedeemLabel">Redeem</label>
+        <input id="redeemInput" type="text" maxlength="12" />
+      </div>
+
       <button id="closeBtn">Close</button>
     </div>
   </div>
 
+  <div id="adminPanel" class="hidden">
+    <h3 id="adminTitle">Map Editor</h3>
+    <div id="brushList"></div>
+    <p id="adminHint"></p>
+    <button id="publishBtn">Publish</button>
+    <div class="admin-actions">
+      <button id="resetMapBtn">Reset</button>
+      <button id="exitAdminBtn">Exit</button>
+    </div>
+  </div>
+
+  <script src="mapdata.js"></script>
   <script src="game.js"></script>
 </body>
 </html>

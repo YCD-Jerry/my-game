@@ -13,7 +13,7 @@ resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
 
 // ── Tile types ───────────────────────────────────────────────────────────────
-const T = { GRASS: 0, TREE: 1, WATER: 2, SAND: 3, PINE: 4, PALM: 5, CHERRY: 6, APPLE: 7 };
+const T = { GRASS: 0, TREE: 1, WATER: 2, SAND: 3, PINE: 4, PALM: 5, CHERRY: 6, APPLE: 7, DIRT: 8 };
 
 // ── Colour palettes ──────────────────────────────────────────────────────────
 const GRASS_COLORS = ['#4a7c3f', '#4f8444', '#558b48', '#4a7c3f', '#527f42'];
@@ -40,9 +40,9 @@ const seed       = [];
 const decorations = [];
 
 const chests = [
-  { col: 12, row: 20, open: false },
-  { col: 38, row: 10, open: false },
-  { col: 22, row: 42, open: false },
+  { col: 12, row: 20, open: false, type: 'normal' },
+  { col: 38, row: 10, open: false, type: 'normal' },
+  { col: 22, row: 42, open: false, type: 'normal' },
 ];
 const chestMap = {};
 for (const ch of chests) chestMap[`${ch.col},${ch.row}`] = ch;
@@ -285,13 +285,128 @@ for (let r = 0; r < ROWS; r++) {
   }
 }
 
+// ── Map editor: persistent layered tile edits (admin mode) ────────────────────
+// Each edited tile is stored as { t: terrainBrush, o?: objectBrush } so an object
+// (chest / flower) can sit on top of any terrain (e.g. a chest on dirt) and both
+// survive across sessions. Edits are re-applied over the procedural map on load.
+const TERRAIN_BRUSHES = ['grass', 'dirt', 'sand', 'water', 'tree', 'pine', 'palm', 'cherry', 'apple'];
+const OBJECT_BRUSHES  = ['flower', 'sunflower', 'chest', 'chestFancy', 'chestPrecious', 'chestSplendid'];
+const TREE_BRUSHES    = ['tree', 'pine', 'palm', 'cherry', 'apple'];
+const CHEST_BRUSH_TYPE = {
+  chest: 'normal', chestFancy: 'fancy', chestPrecious: 'precious', chestSplendid: 'splendid',
+};
+
+let mapEdits = {};
+try { mapEdits = JSON.parse(localStorage.getItem('mapExplorerEdits') || '{}'); } catch (_) {}
+function saveMapEdits() {
+  try { localStorage.setItem('mapExplorerEdits', JSON.stringify(mapEdits)); } catch (_) {}
+}
+
+// What terrain brush best describes the current map tile?
+function currentTerrainBrush(c, r) {
+  switch (map[r][c]) {
+    case T.DIRT:  return 'dirt';
+    case T.SAND:  return 'sand';
+    case T.WATER: return 'water';
+    case T.TREE:  return 'tree';
+    case T.PINE:  return 'pine';
+    case T.PALM:  return 'palm';
+    case T.CHERRY:return 'cherry';
+    case T.APPLE: return 'apple';
+    default:      return 'grass';
+  }
+}
+
+// Remove any object (chest / apple / cherry / decoration / dig spot) on a tile.
+function removeTileObjects(c, r) {
+  const k = `${c},${r}`;
+  if (chestMap[k]) {
+    const i = chests.indexOf(chestMap[k]);
+    if (i >= 0) chests.splice(i, 1);
+    delete chestMap[k];
+  }
+  const ai = appleTrees.findIndex(a => a.col === c && a.row === r);
+  if (ai >= 0) appleTrees.splice(ai, 1);
+  if (appleTreeMap[k]) delete appleTreeMap[k];
+  const ci = cherryTrees.findIndex(a => a.col === c && a.row === r);
+  if (ci >= 0) cherryTrees.splice(ci, 1);
+  for (let i = decorations.length - 1; i >= 0; i--) {
+    if (decorations[i].col === c && decorations[i].row === r) decorations.splice(i, 1);
+  }
+  if (digSpot.col === c && digSpot.row === r) digSpot.removed = true;
+}
+
+function setTerrain(c, r, terr) {
+  switch (terr) {
+    case 'dirt':  map[r][c] = T.DIRT;  break;
+    case 'sand':  map[r][c] = T.SAND;  break;
+    case 'water': map[r][c] = T.WATER; break;
+    case 'tree':  map[r][c] = T.TREE;  break;
+    case 'pine':  map[r][c] = T.PINE;  break;
+    case 'palm':  map[r][c] = T.PALM;  break;
+    case 'cherry':
+      map[r][c] = T.CHERRY;
+      cherryTrees.push({ col: c, row: r, flowers: 3 });
+      break;
+    case 'apple': {
+      map[r][c] = T.APPLE;
+      const at = { col: c, row: r, picked: false, count: Math.floor(rng(c, r, 99) * 3) + 1 };
+      appleTrees.push(at);
+      appleTreeMap[`${c},${r}`] = at;
+      break;
+    }
+    default: map[r][c] = T.GRASS;
+  }
+}
+
+function addObject(c, r, o) {
+  if (o === 'flower' || o === 'sunflower') {
+    decorations.push({ col: c, row: r, type: o });
+  } else if (CHEST_BRUSH_TYPE[o]) {
+    const ch = { col: c, row: r, open: false, type: CHEST_BRUSH_TYPE[o] };
+    chests.push(ch);
+    chestMap[`${c},${r}`] = ch;
+  }
+}
+
+// Fully (re)build a tile from a stored {t, o} state.
+function applyTileState(c, r, st) {
+  if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
+  if (monumentBlocked[`${c},${r}`]) return; // keep the monument plinth protected
+  removeTileObjects(c, r);
+  setTerrain(c, r, st.t || 'grass');
+  if (st.o) addObject(c, r, st.o);
+}
+
+// Normalise any stored value to a {t, o} state (tolerates the old string format).
+function normalizeState(v) {
+  if (typeof v === 'string') {
+    if (OBJECT_BRUSHES.includes(v)) return { t: 'grass', o: v };
+    return { t: v };
+  }
+  return v || { t: 'grass' };
+}
+
+function applyEdits(editObj) {
+  for (const k in editObj) {
+    const [c, r] = k.split(',').map(Number);
+    applyTileState(c, r, normalizeState(editObj[k]));
+  }
+}
+
+// Official published map (from mapdata.js, if deployed) is the shared baseline;
+// personal localStorage edits are layered on top.
+const publishedMap = (typeof window !== 'undefined' && window.PUBLISHED_MAP) || {};
+applyEdits(publishedMap);
+applyEdits(mapEdits);
+
 // ── Player ────────────────────────────────────────────────────────────────────
 const SPEED = 3;
 const player = {
   col: 32, row: 40,
   px:  32 * TILE, py: 40 * TILE,
   targetCol: 32, targetRow: 40,
-  moving: false, facing: 'up',
+  moving: false, facing: 'down',
   frame: 0, frameTimer: 0,
 };
 let tick = 0;
@@ -336,6 +451,15 @@ const I18N = {
     fancyChest: (g, d) => `精致宝箱！金币 x${g}  钻石 x${d}  小红花 x2`,
     apple:      (n)    => `苹果 x${n}`,
     flower:     (n)    => `小红花 x${n}`,
+    redeem: '兑换码', redeemPlaceholder: '输入兑换码',
+    adminTitle: '地图编辑器', adminHint: '点击或拖动来编辑地图（自动保存）。草地=橡皮擦',
+    resetMap: '重置地图', exitAdmin: '退出', adminOn: '已进入管理员模式', publish: '发布到官网',
+    chestLoot: (name, g, d, f) => `${name}！金币 x${g}  钻石 x${d}  小红花 x${f}`,
+    cNormal: '普通的宝箱', cFancy: '精致的宝箱', cPrecious: '珍贵的宝箱', cSplendid: '华丽的宝箱',
+    bGrass: '草地(擦除)', bDirt: '泥土', bSand: '沙地', bWater: '水',
+    bTree: '圆树', bPine: '松树', bPalm: '棕榈', bCherry: '樱花树', bApple: '苹果树',
+    bFlower: '小花', bSunflower: '太阳花',
+    bChest: '普通的宝箱', bChestFancy: '精致的宝箱', bChestPrecious: '珍贵的宝箱', bChestSplendid: '华丽的宝箱',
   },
   en: {
     settings: 'Settings', gender: 'Gender', male: 'Male', female: 'Female',
@@ -348,6 +472,15 @@ const I18N = {
     fancyChest: (g, d) => `Fancy chest! Gold x${g}  Diamond x${d}  Flower x2`,
     apple:      (n)    => `Apple x${n}`,
     flower:     (n)    => `Flower x${n}`,
+    redeem: 'Redeem', redeemPlaceholder: 'Enter code',
+    adminTitle: 'Map Editor', adminHint: 'Click or drag to edit the map (auto-saved). Grass = eraser',
+    resetMap: 'Reset', exitAdmin: 'Exit', adminOn: 'Admin mode enabled', publish: 'Publish',
+    chestLoot: (name, g, d, f) => `${name}! Gold x${g}  Diamond x${d}  Flower x${f}`,
+    cNormal: 'Common Chest', cFancy: 'Exquisite Chest', cPrecious: 'Precious Chest', cSplendid: 'Luxurious Chest',
+    bGrass: 'Grass (erase)', bDirt: 'Dirt', bSand: 'Sand', bWater: 'Water',
+    bTree: 'Tree', bPine: 'Pine', bPalm: 'Palm', bCherry: 'Cherry', bApple: 'Apple',
+    bFlower: 'Flower', bSunflower: 'Sunflower',
+    bChest: 'Common Chest', bChestFancy: 'Exquisite Chest', bChestPrecious: 'Precious Chest', bChestSplendid: 'Luxurious Chest',
   },
 };
 function t(key, ...args) {
@@ -393,13 +526,28 @@ canvas.addEventListener('wheel', e => {
   selIndex = (selIndex + (e.deltaY > 0 ? 1 : -1) + n) % n;
 }, { passive: false });
 
+// ── Admin map-editor runtime state ────────────────────────────────────────────
+let adminMode = false;     // editor active
+let adminBrush = 'tree';   // currently selected brush
+let hoverTile = null;      // {c, r} tile under the cursor (for the editor highlight)
+let painting  = false;     // mouse held down while editing
+let lastPaint = null;      // "c,r" of the last painted tile (drag de-dupe)
+
+// Convert a mouse event to a map tile.
+function eventToTile(e) {
+  const rect = canvas.getBoundingClientRect();
+  const wx = (e.clientX - rect.left) + Math.round(camX);
+  const wy = (e.clientY - rect.top)  + Math.round(camY);
+  return { c: Math.floor(wx / TILE), r: Math.floor(wy / TILE) };
+}
+
 // Click directly on an interaction icon to select + activate it,
 // or click anywhere on the map to walk there.
 let interactionRects = []; // {x, y, w, h, index} in screen space, set during draw
 let movePath   = [];       // queue of {col, row} tiles for click-to-move
 let moveTarget = null;     // {col, row, t} destination marker for drawing
 canvas.addEventListener('click', e => {
-  if (settingsOpen) return;
+  if (settingsOpen || adminMode) return; // in admin mode clicks paint instead
 
   // 1) interaction icon?
   for (const r of interactionRects) {
@@ -424,6 +572,53 @@ canvas.addEventListener('click', e => {
     moveTarget = { col: tc, row: tr, t: 40 };
   }
 });
+
+// Paint one tile with the active brush, persist it, and refresh the visuals.
+// 'grass' acts as a full eraser; terrain brushes keep any object already there
+// (so you can lay dirt under a chest); object brushes keep the terrain.
+function paintTile(c, r) {
+  if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
+  if (monumentBlocked[`${c},${r}`]) return;
+  const k = `${c},${r}`;
+  const prev = mapEdits[k] ? normalizeState(mapEdits[k]) : null;
+  let st;
+
+  if (adminBrush === 'grass') {
+    st = { t: 'grass' }; // eraser → bare grass
+  } else if (TERRAIN_BRUSHES.includes(adminBrush)) {
+    st = { t: adminBrush };
+    if (prev && prev.o && !TREE_BRUSHES.includes(adminBrush)) st.o = prev.o; // keep object
+  } else { // object brush
+    let baseT = prev ? (prev.t || 'grass') : currentTerrainBrush(c, r);
+    if (TREE_BRUSHES.includes(baseT)) baseT = 'grass'; // objects can't sit on a tree
+    st = { t: baseT, o: adminBrush };
+  }
+
+  const sig = k + '|' + JSON.stringify(st);
+  if (lastPaint === sig) return; // no-op during a drag over the same tile
+  lastPaint = sig;
+
+  mapEdits[k] = st;
+  applyTileState(c, r, st);
+  saveMapEdits();
+  renderStaticMap();
+  interactions = buildInteractions(); // collections changed
+}
+
+// Cursor tracking + drag-painting for the editor
+canvas.addEventListener('mousemove', e => {
+  const { c, r } = eventToTile(e);
+  hoverTile = (c >= 0 && c < COLS && r >= 0 && r < ROWS) ? { c, r } : null;
+  if (adminMode && painting && hoverTile) paintTile(hoverTile.c, hoverTile.r);
+});
+canvas.addEventListener('mousedown', e => {
+  if (!adminMode || settingsOpen || e.button !== 0) return;
+  const { c, r } = eventToTile(e);
+  painting = true;
+  lastPaint = null;
+  paintTile(c, r);
+});
+window.addEventListener('mouseup', () => { painting = false; });
 
 // ── Walkability ───────────────────────────────────────────────────────────────
 function isWalkable(r, c) {
@@ -483,15 +678,25 @@ function findPath(sc, sr, tc, tr) {
 // ── Interaction actions ───────────────────────────────────────────────────────
 const near = (o) => Math.max(Math.abs(o.col - player.col), Math.abs(o.row - player.row)) <= 1;
 
+// Loot tiers per chest type: gold/diamond ranges [min,max], flowers, and name key.
+const CHEST_LOOT = {
+  normal:   { g: [1, 10],  d: [1, 10],  f: 1, name: 'cNormal' },
+  fancy:    { g: [5, 18],  d: [5, 18],  f: 2, name: 'cFancy' },
+  precious: { g: [10, 25], d: [10, 25], f: 3, name: 'cPrecious' },
+  splendid: { g: [20, 40], d: [20, 40], f: 5, name: 'cSplendid' },
+};
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
 function doOpenChest(ch) {
   ch.open = true;
   ch.disappearTimer = 240;
-  const gold    = Math.floor(Math.random() * 10) + 1;
-  const diamond = Math.floor(Math.random() * 10) + 1;
+  const spec    = CHEST_LOOT[ch.type] || CHEST_LOOT.normal;
+  const gold    = randInt(spec.g[0], spec.g[1]);
+  const diamond = randInt(spec.d[0], spec.d[1]);
   inventory.gold      += gold;
   inventory.diamond   += diamond;
-  inventory.redflower += 1;
-  lootMessage = { text: t('chest', gold, diamond), timer: 200 };
+  inventory.redflower += spec.f;
+  lootMessage = { text: t('chestLoot', t(spec.name), gold, diamond, spec.f), timer: 220 };
 }
 
 function doDig() { digSpot.dug = true; }
@@ -527,7 +732,7 @@ function buildInteractions() {
   for (const ch of chests) {
     if (!ch.open && near(ch)) list.push({ icon: '💰', label: t('pressOpen'), act: () => doOpenChest(ch) });
   }
-  if (near(digSpot)) {
+  if (!digSpot.removed && near(digSpot)) {
     if (!digSpot.dug)            list.push({ icon: '⛏️', label: t('pressDig'),       act: doDig });
     else if (!digSpot.chestOpen) list.push({ icon: '🎁', label: t('pressOpenFancy'), act: doOpenFancy });
   }
@@ -856,6 +1061,22 @@ function drawPlayer(g, x, y, frame, facing) {
   }
 }
 
+// ── Dirt ground tile ──────────────────────────────────────────────────────────
+function drawDirt(g, x, y) {
+  g.fillStyle = '#6b3d1e';
+  g.fillRect(x, y, TILE, TILE);
+  g.fillStyle = '#5a3018';
+  g.fillRect(x + 1, y + 1, TILE - 2, TILE - 2);
+  g.fillStyle = '#7a4a26';
+  for (let i = 0; i < 5; i++) {
+    g.fillRect(x + 3 + (i * 11) % 24, y + 4 + (i * 7) % 24, 3, 2);
+  }
+  g.fillStyle = '#4a2810';
+  for (let i = 0; i < 4; i++) {
+    g.fillRect(x + 6 + (i * 9) % 20, y + 8 + (i * 5) % 18, 2, 2);
+  }
+}
+
 // ── Dig-spot tile ─────────────────────────────────────────────────────────────
 function drawDugTile(x, y) {
   ctx.fillStyle = '#6b3d1e';
@@ -1040,6 +1261,14 @@ function drawSplendidChest(x, y, open) {
   }
 }
 
+// Dispatch to the correct chest art by type.
+function drawChestByType(type, x, y, open) {
+  if      (type === 'fancy')    drawFancyChest(x, y, open);
+  else if (type === 'precious') drawPreciousChest(x, y, open);
+  else if (type === 'splendid') drawSplendidChest(x, y, open);
+  else                          drawChest(x, y, open);
+}
+
 // ── Washington Monument ───────────────────────────────────────────────────────
 const occCanvas  = document.createElement('canvas');
 occCanvas.width  = 32 + 12 * 2;
@@ -1133,6 +1362,7 @@ function renderStaticMap() {
       const t = map[r][c];
       if      (t === T.WATER) drawWaterBase(mctx, x, y, seed[r][c]);
       else if (t === T.SAND)  drawSand(mctx, x, y, seed[r][c]);
+      else if (t === T.DIRT)  drawDirt(mctx, x, y);
       else                    drawGrass(mctx, x, y, seed[r][c]);
     }
   }
@@ -1416,12 +1646,12 @@ function draw() {
     const chAlpha = (ch.open && ch.disappearTimer <= 60) ? ch.disappearTimer / 60 : 1;
     ctx.save();
     ctx.globalAlpha = chAlpha;
-    drawChest(x, y, ch.open);
+    drawChestByType(ch.type, x, y, ch.open);
     ctx.restore();
   }
 
   // ── Dig spot ──────────────────────────────────────────────────────────────
-  if (digSpot.dug) {
+  if (digSpot.dug && !digSpot.removed) {
     const digAlpha = (digSpot.chestOpen && digSpot.disappearTimer <= 60)
       ? digSpot.disappearTimer / 60 : 1;
     const digGone  = digSpot.chestOpen && digSpot.disappearTimer <= 0;
@@ -1461,6 +1691,18 @@ function draw() {
 
   // ── Rainbows (topmost world layer) ────────────────────────────────────────
   for (const p of ponds) if (p.rainbowAnim > 0) drawRainbow(p);
+
+  // ── Editor hover highlight ────────────────────────────────────────────────
+  if (adminMode && hoverTile) {
+    const hx = hoverTile.c * TILE, hy = hoverTile.r * TILE;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(hx + 1, hy + 1, TILE - 2, TILE - 2);
+    ctx.fillStyle = 'rgba(255,216,77,0.18)';
+    ctx.fillRect(hx + 1, hy + 1, TILE - 2, TILE - 2);
+    ctx.restore();
+  }
 
   // ── Player name tag ───────────────────────────────────────────────────────
   if (settings.name) {
@@ -1558,7 +1800,13 @@ const genderSeg     = document.getElementById('genderSeg');
 const langSeg       = document.getElementById('langSeg');
 const clothesWrap   = document.getElementById('clothesSwatches');
 const nameInput     = document.getElementById('nameInput');
+const redeemInput   = document.getElementById('redeemInput');
 const closeBtn      = document.getElementById('closeBtn');
+const adminPanel    = document.getElementById('adminPanel');
+const brushList     = document.getElementById('brushList');
+const resetMapBtn   = document.getElementById('resetMapBtn');
+const exitAdminBtn  = document.getElementById('exitAdminBtn');
+const publishBtn    = document.getElementById('publishBtn');
 
 // Build clothes swatches
 CLOTHES.forEach((c, i) => {
@@ -1577,17 +1825,76 @@ langSeg.querySelectorAll('button').forEach(b => {
 });
 nameInput.addEventListener('input', () => { settings.name = nameInput.value; saveSettings(); });
 
+// Redeem code → unlock admin map editor
+redeemInput.addEventListener('input', () => {
+  if (redeemInput.value.trim() === '142857') {
+    redeemInput.value = '';
+    enableAdmin();
+    lootMessage = { text: t('adminOn'), timer: 180 };
+  }
+});
+
+// ── Admin editor: brush palette ───────────────────────────────────────────────
+const BRUSHES = [
+  { id: 'grass',         key: 'bGrass',         color: '#4a7c3f' },
+  { id: 'dirt',          key: 'bDirt',          color: '#6b3d1e' },
+  { id: 'sand',          key: 'bSand',          color: '#cdac50' },
+  { id: 'water',         key: 'bWater',         color: '#2a6fa8' },
+  { id: 'tree',          key: 'bTree',          color: '#3a6e2c' },
+  { id: 'pine',          key: 'bPine',          color: '#1e4a1a' },
+  { id: 'palm',          key: 'bPalm',          color: '#2a7820' },
+  { id: 'cherry',        key: 'bCherry',        color: '#ffb7c5' },
+  { id: 'apple',         key: 'bApple',         color: '#d42020' },
+  { id: 'flower',        key: 'bFlower',        color: '#e05080' },
+  { id: 'sunflower',     key: 'bSunflower',     color: '#e8b818' },
+  { id: 'chest',         key: 'bChest',         color: '#c8900a' },
+  { id: 'chestFancy',    key: 'bChestFancy',    color: '#c8920a' },
+  { id: 'chestPrecious', key: 'bChestPrecious', color: '#78a8c0' },
+  { id: 'chestSplendid', key: 'bChestSplendid', color: '#ffe060' },
+];
+BRUSHES.forEach(br => {
+  const b = document.createElement('button');
+  b.dataset.brush = br.id;
+  const dot = document.createElement('span');
+  dot.className = 'dot';
+  dot.style.background = br.color;
+  const label = document.createElement('span');
+  label.className = 'blabel';
+  b.appendChild(dot);
+  b.appendChild(label);
+  b.addEventListener('click', () => { adminBrush = br.id; refreshBrushUI(); });
+  brushList.appendChild(b);
+});
+
+function refreshBrushUI() {
+  brushList.querySelectorAll('button').forEach(b =>
+    b.classList.toggle('active', b.dataset.brush === adminBrush));
+}
+
 function applyLanguageLabels() {
   document.getElementById('stTitle').textContent        = t('settings');
   document.getElementById('stGenderLabel').textContent  = t('gender');
   document.getElementById('stClothesLabel').textContent = t('clothes');
   document.getElementById('stNameLabel').textContent    = t('name');
   document.getElementById('stLangLabel').textContent    = t('language');
+  document.getElementById('stRedeemLabel').textContent  = t('redeem');
   closeBtn.textContent          = t('close');
   nameInput.placeholder         = t('namePlaceholder');
+  redeemInput.placeholder       = t('redeemPlaceholder');
   genderSeg.querySelector('[data-gender="male"]').textContent   = t('male');
   genderSeg.querySelector('[data-gender="female"]').textContent = t('female');
   settingsBtn.title = t('settings');
+
+  // Admin panel labels
+  document.getElementById('adminTitle').textContent = t('adminTitle');
+  document.getElementById('adminHint').textContent  = t('adminHint');
+  publishBtn.textContent   = t('publish');
+  resetMapBtn.textContent  = t('resetMap');
+  exitAdminBtn.textContent = t('exitAdmin');
+  BRUSHES.forEach(br => {
+    const b = brushList.querySelector(`[data-brush="${br.id}"] .blabel`);
+    if (b) b.textContent = t(br.key);
+  });
 }
 
 function refreshSettingsUI() {
@@ -1615,6 +1922,45 @@ function closeSettings() {
 settingsBtn.addEventListener('click', openSettings);
 closeBtn.addEventListener('click', closeSettings);
 settingsModal.addEventListener('click', e => { if (e.target === settingsModal) closeSettings(); });
+
+// ── Admin enable / disable / reset ────────────────────────────────────────────
+// Admin mode is session-only: it never auto-logs-in. The redeem code must be
+// entered again after every reload.
+function enableAdmin() {
+  adminMode = true;
+  adminPanel.classList.remove('hidden');
+  refreshBrushUI();
+  applyLanguageLabels();
+  movePath = []; moveTarget = null; // stop any pending click-to-move
+}
+function disableAdmin() {
+  adminMode = false;
+  painting = false;
+  adminPanel.classList.add('hidden');
+}
+exitAdminBtn.addEventListener('click', disableAdmin);
+resetMapBtn.addEventListener('click', () => {
+  mapEdits = {};
+  saveMapEdits();
+  location.reload(); // rebuild the pristine procedural map
+});
+
+// Publish: download an updated mapdata.js containing the full effective edit set.
+// Replace mapdata.js on the website to make these edits the shared baseline.
+publishBtn.addEventListener('click', () => {
+  const merged = Object.assign({}, publishedMap, mapEdits);
+  const content =
+    '// Official published map for Map Explorer (generated by the in-game editor).\n' +
+    'window.PUBLISHED_MAP = ' + JSON.stringify(merged) + ';\n';
+  const blob = new Blob([content], { type: 'text/javascript' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = 'mapdata.js';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
 
 refreshSettingsUI();
 
