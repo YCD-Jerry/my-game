@@ -63,6 +63,8 @@ const inventory  = {
   tomatoSoup: 0, sweetPancake: 0,
   // materials (from chopping trees)
   lumber: 0, pinecone: 0,
+  // special items
+  driftBottle: 0,
 };
 let   lootMessage = null; // { text, timer }
 let   shopOpen    = false;
@@ -77,6 +79,96 @@ try {
 } catch (_) {}
 let   cookOpen    = false;
 let   bagOpen     = false;
+
+// ── Achievement system ────────────────────────────────────────────────────────
+// Each chest type has 3 milestones (3 / 6 / 10) with diamond rewards (5 / 10 / 20).
+const ACHIEVEMENTS = [
+  // ── Common chest
+  { id: 'normal_3',    icon: '📦', nameZh: '普通的宝箱·Ⅰ', nameEn: 'Common Chest I',
+    descZh: '开启3个普通的宝箱',   descEn: 'Open 3 Common Chests',   target: 3,  track: 'chest_normal',   reward: { diamond: 5  } },
+  { id: 'normal_6',    icon: '📦', nameZh: '普通的宝箱·Ⅱ', nameEn: 'Common Chest II',
+    descZh: '开启6个普通的宝箱',   descEn: 'Open 6 Common Chests',   target: 6,  track: 'chest_normal',   reward: { diamond: 10 } },
+  { id: 'normal_10',   icon: '📦', nameZh: '普通的宝箱·Ⅲ', nameEn: 'Common Chest III',
+    descZh: '开启10个普通的宝箱',  descEn: 'Open 10 Common Chests',  target: 10, track: 'chest_normal',   reward: { diamond: 20 } },
+  // ── Exquisite chest
+  { id: 'fancy_3',     icon: '🎁', nameZh: '精致的宝箱·Ⅰ', nameEn: 'Exquisite Chest I',
+    descZh: '开启3个精致的宝箱',   descEn: 'Open 3 Exquisite Chests',   target: 3,  track: 'chest_fancy',   reward: { diamond: 5  } },
+  { id: 'fancy_6',     icon: '🎁', nameZh: '精致的宝箱·Ⅱ', nameEn: 'Exquisite Chest II',
+    descZh: '开启6个精致的宝箱',   descEn: 'Open 6 Exquisite Chests',   target: 6,  track: 'chest_fancy',   reward: { diamond: 10 } },
+  { id: 'fancy_10',    icon: '🎁', nameZh: '精致的宝箱·Ⅲ', nameEn: 'Exquisite Chest III',
+    descZh: '开启10个精致的宝箱',  descEn: 'Open 10 Exquisite Chests',  target: 10, track: 'chest_fancy',   reward: { diamond: 20 } },
+  // ── Precious chest
+  { id: 'precious_3',  icon: '💎', nameZh: '珍贵的宝箱·Ⅰ', nameEn: 'Precious Chest I',
+    descZh: '开启3个珍贵的宝箱',   descEn: 'Open 3 Precious Chests',   target: 3,  track: 'chest_precious', reward: { diamond: 5  } },
+  { id: 'precious_6',  icon: '💎', nameZh: '珍贵的宝箱·Ⅱ', nameEn: 'Precious Chest II',
+    descZh: '开启6个珍贵的宝箱',   descEn: 'Open 6 Precious Chests',   target: 6,  track: 'chest_precious', reward: { diamond: 10 } },
+  { id: 'precious_10', icon: '💎', nameZh: '珍贵的宝箱·Ⅲ', nameEn: 'Precious Chest III',
+    descZh: '开启10个珍贵的宝箱',  descEn: 'Open 10 Precious Chests',  target: 10, track: 'chest_precious', reward: { diamond: 20 } },
+  // ── Luxurious chest
+  { id: 'splendid_3',  icon: '👑', nameZh: '华丽的宝箱·Ⅰ', nameEn: 'Luxurious Chest I',
+    descZh: '开启3个华丽的宝箱',   descEn: 'Open 3 Luxurious Chests',   target: 3,  track: 'chest_splendid', reward: { diamond: 5  } },
+  { id: 'splendid_6',  icon: '👑', nameZh: '华丽的宝箱·Ⅱ', nameEn: 'Luxurious Chest II',
+    descZh: '开启6个华丽的宝箱',   descEn: 'Open 6 Luxurious Chests',   target: 6,  track: 'chest_splendid', reward: { diamond: 10 } },
+  { id: 'splendid_10', icon: '👑', nameZh: '华丽的宝箱·Ⅲ', nameEn: 'Luxurious Chest III',
+    descZh: '开启10个华丽的宝箱',  descEn: 'Open 10 Luxurious Chests',  target: 10, track: 'chest_splendid', reward: { diamond: 20 } },
+  // ── Cooking
+  { id: 'first_cook',  icon: '🍳', nameZh: '初学厨师',       nameEn: 'Budding Chef',
+    descZh: '第一次烹饪一顿餐食',  descEn: 'Cook a dish for the first time', target: 1, track: 'cook' },
+];
+
+let achProgress = {};  // track → count
+let achUnlocked = {};  // id → true
+try {
+  const saved = JSON.parse(localStorage.getItem('mapExplorerAch') || '{}');
+  achProgress = saved.progress || {};
+  achUnlocked = saved.unlocked || {};
+} catch (_) {}
+
+function saveAch() {
+  try { localStorage.setItem('mapExplorerAch', JSON.stringify({ progress: achProgress, unlocked: achUnlocked })); } catch (_) {}
+}
+
+// ── Rich code (v我50 / makemerich) ───────────────────────────────────────────
+let richCodeUsed = false;
+try { richCodeUsed = !!localStorage.getItem('mapExplorerRichUsed'); } catch (_) {}
+function saveRichUsed(v) { try { v ? localStorage.setItem('mapExplorerRichUsed','1') : localStorage.removeItem('mapExplorerRichUsed'); } catch(_){} }
+
+// ── Drift bottle state ────────────────────────────────────────────────────────
+let driftBottleOpened = false;
+try { driftBottleOpened = !!localStorage.getItem('mapExplorerDriftOpened'); } catch (_) {}
+
+function progressAch(track, amount = 1) {
+  achProgress[track] = (achProgress[track] || 0) + amount;
+  saveAch();
+  for (const a of ACHIEVEMENTS) {
+    if (a.track === track && !achUnlocked[a.id] && achProgress[track] >= a.target) {
+      achUnlocked[a.id] = true;
+      // Grant reward
+      if (a.reward) {
+        if (a.reward.diamond) { inventory.diamond += a.reward.diamond; saveInventory(); }
+      }
+      saveAch();
+      showAchievementUnlock(a);
+    }
+  }
+}
+
+let _achNotifTimer = null;
+function showAchievementUnlock(a) {
+  const notif = document.getElementById('achNotif');
+  if (!notif) return;
+  const zh = settings.language !== 'en';
+  document.getElementById('achNotifIcon').textContent  = a.icon;
+  document.getElementById('achNotifLabel').textContent = zh ? '成就达成' : 'Achievement Unlocked';
+  document.getElementById('achNotifName').textContent  = zh ? a.nameZh : a.nameEn;
+  // Show reward in description if present
+  let desc = zh ? a.descZh : a.descEn;
+  if (a.reward?.diamond) desc += zh ? `  （获得 💎×${a.reward.diamond}）` : `  (+💎${a.reward.diamond})`;
+  document.getElementById('achNotifDesc').textContent  = desc;
+  notif.classList.add('show');
+  if (_achNotifTimer) clearTimeout(_achNotifTimer);
+  _achNotifTimer = setTimeout(() => notif.classList.remove('show'), 4500);
+}
 
 // ── DOM notification (above all modals) ──────────────────────────────────────
 let _notifTimer = null;
@@ -155,8 +247,10 @@ const INVENTORY_META = [
   // cooked dishes (inherit icon from RECIPES)
   ...RECIPES.map(r => ({ key: r.key, icon: r.icon })),
   // materials
-  { key: 'lumber',   icon: '🪵' },
-  { key: 'pinecone', icon: '🌰' },
+  { key: 'lumber',      icon: '🪵' },
+  { key: 'pinecone',    icon: '🌰' },
+  // special
+  { key: 'driftBottle', icon: '🫙' },
 ];
 
 // ── Backpack categories ───────────────────────────────────────────────────────
@@ -167,7 +261,7 @@ const BAG_INGREDIENT_KEYS = [
   'salt', 'sugar', 'pepper', 'meat',
 ];
 const BAG_FOOD_KEYS     = RECIPES.map(r => r.key);
-const BAG_MATERIAL_KEYS = ['lumber', 'pinecone'];
+const BAG_MATERIAL_KEYS = ['lumber', 'pinecone', 'driftBottle'];
 
 // ── Dig spots: a buried chest. Stand nearby, press F to dig, press F again to open.
 const digSpots   = [];
@@ -636,7 +730,7 @@ const I18N = {
     apple:      (n)    => `苹果 x${n}`,
     flower:     (n)    => `小红花 x${n}`,
     redeem: '兑换码', redeemPlaceholder: '输入兑换码',
-    adminTitle: '地图编辑器', adminHint: '点击或拖动来编辑地图（自动保存）。草地=橡皮擦',
+    adminTitle: '地图编辑器', adminBrushLabel: '画笔', adminHint: '点击或拖动编辑，自动保存。草地=擦除',
     resetMap: '重置地图', exitAdmin: '退出', adminOn: '已进入管理员模式', publish: '发布到官网', published: '已发布！请将 mapdata.js 上传到服务器',
     chestLoot: (name, g, d, f) => `${name}！金币 x${g}  钻石 x${d}  小红花 x${f}`,
     cNormal: '普通的宝箱', cFancy: '精致的宝箱', cPrecious: '珍贵的宝箱', cSplendid: '华丽的宝箱',
@@ -666,7 +760,11 @@ const I18N = {
     adminInvTitle: '背包编辑',
     gold: '金币', diamond: '钻石', redflower: '小红花', apple: '苹果', coconut: '椰子',
     bagTitle: '🎒 背包', bagIngredients: '食材', bagFood: '餐食', bagMaterials: '材料', bagEmpty: '空空如也',
-    lumber: '木材', pinecone: '松子',
+    lumber: '木材', pinecone: '松子', driftBottle: '漂流瓶',
+    foundDriftBottle: '🫙 宝箱里藏着一个漂流瓶，快去背包里看看！',
+    driftMsgTitle: '漂流瓶里的纸条', driftMsgClose: '收起',
+    driftMsgBody: '请在兑换码内输入 Makemerich',
+    richCodeOk: '💰 恭喜发财！获得 50,000 金币！', richCodeUsedAlready: '该兑换码已使用过了',
     choppedLumber: '木材 x1', choppedPine: (n) => `木材 x1  松子 x${n}`,
   },
   en: {
@@ -682,7 +780,7 @@ const I18N = {
     apple:      (n)    => `Apple x${n}`,
     flower:     (n)    => `Flower x${n}`,
     redeem: 'Redeem', redeemPlaceholder: 'Enter code',
-    adminTitle: 'Map Editor', adminHint: 'Click or drag to edit the map (auto-saved). Grass = eraser',
+    adminTitle: 'Map Editor', adminBrushLabel: 'Brushes', adminHint: 'Click or drag to edit. Grass = erase',
     resetMap: 'Reset', exitAdmin: 'Exit', adminOn: 'Admin mode enabled', publish: 'Publish', published: 'Published! Upload mapdata.js to your server',
     chestLoot: (name, g, d, f) => `${name}! Gold x${g}  Diamond x${d}  Flower x${f}`,
     cNormal: 'Common Chest', cFancy: 'Exquisite Chest', cPrecious: 'Precious Chest', cSplendid: 'Luxurious Chest',
@@ -712,7 +810,11 @@ const I18N = {
     adminInvTitle: 'Inventory Editor',
     gold: 'Gold', diamond: 'Diamond', redflower: 'Flower', apple: 'Apple', coconut: 'Coconut',
     bagTitle: '🎒 Backpack', bagIngredients: 'Ingredients', bagFood: 'Food', bagMaterials: 'Materials', bagEmpty: 'Empty',
-    lumber: 'Lumber', pinecone: 'Pine Cone',
+    lumber: 'Lumber', pinecone: 'Pine Cone', driftBottle: 'Drift Bottle',
+    foundDriftBottle: '🫙 The chest hid a drift bottle — check your backpack!',
+    driftMsgTitle: 'Message in a Bottle', driftMsgClose: 'Close',
+    driftMsgBody: 'Enter Makemerich in the redeem code box',
+    richCodeOk: '💰 You\'re rich! +50,000 Gold!', richCodeUsedAlready: 'This code has already been used',
     choppedLumber: 'Lumber x1', choppedPine: (n) => `Lumber x1  Pine Cone x${n}`,
   },
 };
@@ -725,7 +827,7 @@ function t(key, ...args) {
 let settingsOpen = false;
 const keys = {};
 function isTyping(e) {
-  return settingsOpen || shopOpen || cookOpen || bagOpen || (e.target && e.target.tagName === 'INPUT');
+  return settingsOpen || shopOpen || cookOpen || bagOpen || achOpen || (e.target && e.target.tagName === 'INPUT');
 }
 window.addEventListener('keydown', e => {
   if (isTyping(e)) return;
@@ -953,10 +1055,10 @@ const near = (o) => Math.max(Math.abs(o.col - player.col), Math.abs(o.row - play
 
 // Loot tiers per chest type: gold/diamond ranges [min,max], flowers, and name key.
 const CHEST_LOOT = {
-  normal:   { g: [1, 10],  d: [1, 10],  f: 1, name: 'cNormal' },
-  fancy:    { g: [5, 18],  d: [5, 18],  f: 2, name: 'cFancy' },
-  precious: { g: [10, 25], d: [10, 25], f: 3, name: 'cPrecious' },
-  splendid: { g: [20, 40], d: [20, 40], f: 5, name: 'cSplendid' },
+  normal:   { g: [1, 10],  d: 2,  f: 1, name: 'cNormal' },
+  fancy:    { g: [5, 18],  d: 5,  f: 2, name: 'cFancy' },
+  precious: { g: [10, 25], d: 10, f: 3, name: 'cPrecious' },
+  splendid: { g: [20, 40], d: 20, f: 5, name: 'cSplendid' },
 };
 function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
@@ -965,12 +1067,19 @@ function doOpenChest(ch) {
   ch.disappearTimer = 240;
   const spec    = CHEST_LOOT[ch.type] || CHEST_LOOT.normal;
   const gold    = randInt(spec.g[0], spec.g[1]);
-  const diamond = randInt(spec.d[0], spec.d[1]);
+  const diamond = spec.d; // fixed per chest tier
   inventory.gold      += gold;
   inventory.diamond   += diamond;
   inventory.redflower += spec.f;
   lootMessage = { text: t('chestLoot', t(spec.name), gold, diamond, spec.f), timer: 220 };
+  // Pond-centre chest hides a drift bottle
+  if (ch.col === 20 && ch.row === 38 && inventory.driftBottle === 0) {
+    inventory.driftBottle = 1;
+    setTimeout(() => showNotif(t('foundDriftBottle')), 2400);
+  }
   saveInventory();
+  progressAch('chest_' + ch.type);
+
 }
 
 function doDig(ds) { ds.dug = true; }
@@ -980,12 +1089,14 @@ function doOpenDigChest(ds) {
   ds.disappearTimer = 240;
   const spec    = CHEST_LOOT[ds.chestType] || CHEST_LOOT.fancy;
   const gold    = randInt(spec.g[0], spec.g[1]);
-  const diamond = randInt(spec.d[0], spec.d[1]);
+  const diamond = spec.d; // fixed per chest tier
   inventory.gold      += gold;
   inventory.diamond   += diamond;
   inventory.redflower += spec.f;
   lootMessage = { text: t('chestLoot', t(spec.name), gold, diamond, spec.f), timer: 240 };
   saveInventory();
+  progressAch('chest_' + ds.chestType);
+
 }
 
 function doPickApple(at) {
@@ -1518,74 +1629,75 @@ function drawChest(x, y, open) {
   }
 }
 
-// ── Tier-2 fancy chest ────────────────────────────────────────────────────────
+// ── Tier-2 exquisite chest (blue-grey body, silver trim) ──────────────────────
 function drawFancyChest(x, y, open) {
   const BOT = y + 31, bodyH = 15, lidH = 10;
   const bodyTop = BOT - bodyH;
   // feet
-  ctx.fillStyle = '#4a3010';
+  ctx.fillStyle = '#38404a';
   ctx.fillRect(x + 4, BOT - 4, 5, 4);
   ctx.fillRect(x + TILE - 9, BOT - 4, 5, 4);
   if (!open) {
-    ctx.fillStyle = '#6a3e14';
+    ctx.fillStyle = '#3a4a5e';           // blue-grey body
     ctx.fillRect(x + 4, bodyTop, TILE - 8, bodyH);
-    ctx.fillStyle = '#c8920a';
+    ctx.fillStyle = '#a0c0d8';           // silver-blue trim
     ctx.fillRect(x + 4, bodyTop + 3, TILE - 8, 2);
     ctx.fillRect(x + 4, bodyTop + bodyH - 3, TILE - 8, 2);
-    ctx.fillStyle = '#7a4818';
+    ctx.fillStyle = '#28384c';           // darker lid
     ctx.fillRect(x + 4, bodyTop - lidH, TILE - 8, lidH);
-    ctx.fillStyle = '#c8920a';
+    ctx.fillStyle = '#a0c0d8';
     ctx.fillRect(x + 4,        bodyTop, 3, bodyH);
     ctx.fillRect(x + TILE - 7, bodyTop, 3, bodyH);
+    ctx.fillStyle = '#60e0ff';           // cyan gem
     ctx.beginPath();
     ctx.arc(x + 16, bodyTop + bodyH / 2, 4, 0, Math.PI * 2);
     ctx.fill();
   } else {
-    ctx.fillStyle = '#6a3e14';
+    ctx.fillStyle = '#3a4a5e';
     ctx.fillRect(x + 4, bodyTop, TILE - 8, bodyH);
-    ctx.fillStyle = '#160a02';
+    ctx.fillStyle = '#181e28';
     ctx.fillRect(x + 5, bodyTop, TILE - 10, 6);
-    ctx.fillStyle = '#2a1208';
+    ctx.fillStyle = '#20283a';
     ctx.fillRect(x + 5, bodyTop + 5, TILE - 10, 2);
-    _chestLid(x - 1, bodyTop, lidH + 5, '#7a4216', '#9a5820', '#d4980e');
-    ctx.fillStyle = '#8a4a1a';
+    _chestLid(x - 1, bodyTop, lidH + 5, '#28384c', '#3a4a5e', '#a0c0d8');
+    ctx.fillStyle = '#3a4a5e';
     ctx.beginPath();
     ctx.ellipse(x + 15, bodyTop - lidH - 1, 9, 4, 0, Math.PI, 0);
     ctx.fill();
   }
 }
 
-// ── Tier-3 precious chest ─────────────────────────────────────────────────────
+// ── Tier-3 precious chest (purple) ───────────────────────────────────────────
 function drawPreciousChest(x, y, open) {
   const BOT = y + 31, bodyH = 16, lidH = 12;
   const bodyTop = BOT - bodyH;
-  ctx.fillStyle = '#304050';
+  ctx.fillStyle = '#4a2860';            // dark purple feet
   ctx.fillRect(x + 3, BOT - 5, 6, 5);
   ctx.fillRect(x + TILE - 9, BOT - 5, 6, 5);
   if (!open) {
-    ctx.fillStyle = '#283848';
+    ctx.fillStyle = '#5a2878';          // purple body
     ctx.fillRect(x + 3, bodyTop, TILE - 6, bodyH);
-    ctx.fillStyle = '#78a8c0';
+    ctx.fillStyle = '#c080f0';          // lavender trim
     ctx.fillRect(x + 3, bodyTop + 3, TILE - 6, 2);
     ctx.fillRect(x + 3, bodyTop + bodyH - 3, TILE - 6, 2);
-    ctx.fillStyle = '#1c2c3c';
+    ctx.fillStyle = '#3a1858';          // darker purple lid
     ctx.fillRect(x + 3, bodyTop - lidH, TILE - 6, lidH);
-    ctx.fillStyle = '#78a8c0';
+    ctx.fillStyle = '#c080f0';
     ctx.fillRect(x + 3,        bodyTop, 3, bodyH);
     ctx.fillRect(x + TILE - 6, bodyTop, 3, bodyH);
-    ctx.fillStyle = '#40e8c8';
+    ctx.fillStyle = '#e040ff';          // bright purple gem
     ctx.beginPath();
     ctx.arc(x + 16, bodyTop + bodyH / 2, 4, 0, Math.PI * 2);
     ctx.fill();
   } else {
-    ctx.fillStyle = '#283848';
+    ctx.fillStyle = '#5a2878';
     ctx.fillRect(x + 3, bodyTop, TILE - 6, bodyH);
-    ctx.fillStyle = '#0e1418';
+    ctx.fillStyle = '#200c30';
     ctx.fillRect(x + 4, bodyTop, TILE - 8, 6);
-    ctx.fillStyle = '#182028';
+    ctx.fillStyle = '#301048';
     ctx.fillRect(x + 4, bodyTop + 5, TILE - 8, 2);
-    _chestLid(x - 1, bodyTop, lidH + 6, '#243040', '#304050', '#78a8c0');
-    ctx.fillStyle = '#78a8c0';
+    _chestLid(x - 1, bodyTop, lidH + 6, '#3a1858', '#5a2878', '#c080f0');
+    ctx.fillStyle = '#e040ff';
     ctx.beginPath();
     ctx.arc(x + 16, bodyTop - 3, 3.5, 0, Math.PI * 2);
     ctx.fill();
@@ -2075,17 +2187,19 @@ function drawHUD() {
     const alpha = Math.min(1, lootMessage.timer / 30);
     if (lootMessage.timer <= 0) { lootMessage = null; }
     else {
+      ctx.font = '600 15px ' + UI_FONT;
       ctx.globalAlpha = alpha;
-      const w = 360, h = 60;
-      const px = Math.round(canvas.width  / 2 - w / 2);
-      const py = Math.round(canvas.height / 2 - 90);
-      roundRectPath(ctx, px, py, w, h, 14);
+      const h  = 44;
+      const tw = ctx.measureText(lootMessage.text).width;
+      const w  = Math.min(tw + 40, canvas.width - 24);
+      const px = Math.round(canvas.width / 2 - w / 2);
+      const py = Math.round(canvas.height - h - 20); // bottom of screen, below interaction bar
+      roundRectPath(ctx, px, py, w, h, 12);
       ctx.fillStyle = 'rgba(18,18,20,0.96)';
       ctx.fill();
       ctx.strokeStyle = 'rgba(255,215,50,0.55)';
       ctx.lineWidth = 1.5;
       ctx.stroke();
-      ctx.font      = '600 15px ' + UI_FONT;
       ctx.fillStyle = '#ffd84d';
       ctx.fillText(lootMessage.text, canvas.width / 2, py + h / 2 + 1);
     }
@@ -2355,10 +2469,47 @@ const nameInput     = document.getElementById('nameInput');
 const redeemInput   = document.getElementById('redeemInput');
 const closeBtn      = document.getElementById('closeBtn');
 const adminPanel    = document.getElementById('adminPanel');
+const adminDragBar  = document.getElementById('adminDragBar');
 const brushList     = document.getElementById('brushList');
 const resetMapBtn   = document.getElementById('resetMapBtn');
 const exitAdminBtn  = document.getElementById('exitAdminBtn');
 const publishBtn    = document.getElementById('publishBtn');
+
+// ── Admin panel drag ──────────────────────────────────────────────────────────
+(function () {
+  let ox = 0, oy = 0, dragging = false;
+  adminDragBar.addEventListener('mousedown', e => {
+    dragging = true;
+    const r = adminPanel.getBoundingClientRect();
+    // Convert from right-anchor to left-anchor for dragging
+    if (!adminPanel.style.left) {
+      adminPanel.style.left  = r.left + 'px';
+      adminPanel.style.right = 'auto';
+      adminPanel.style.top   = r.top  + 'px';
+    }
+    ox = e.clientX - r.left;
+    oy = e.clientY - r.top;
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    adminPanel.style.left = Math.max(0, Math.min(window.innerWidth  - adminPanel.offsetWidth,  e.clientX - ox)) + 'px';
+    adminPanel.style.top  = Math.max(0, Math.min(window.innerHeight - adminPanel.offsetHeight, e.clientY - oy)) + 'px';
+  });
+  window.addEventListener('mouseup', () => { dragging = false; });
+})();
+
+// ── Admin section collapse ────────────────────────────────────────────────────
+document.querySelectorAll('.admin-section-hdr').forEach(hdr => {
+  const sectionId = hdr.dataset.section;
+  const body = hdr.nextElementSibling;
+  body.style.maxHeight = body.scrollHeight + 'px';
+  hdr.addEventListener('click', () => {
+    const collapsed = hdr.classList.toggle('collapsed');
+    body.classList.toggle('collapsed', collapsed);
+    if (!collapsed) body.style.maxHeight = body.scrollHeight + 'px';
+  });
+});
 
 // Build clothes swatches
 CLOTHES.forEach((c, i) => {
@@ -2379,15 +2530,35 @@ nameInput.addEventListener('input', () => { settings.name = nameInput.value; sav
 
 // Redeem code → unlock admin map editor
 redeemInput.addEventListener('input', () => {
-  const val = redeemInput.value.trim();
-  if (val.length < 4) return;
+  const raw = redeemInput.value.trim();
+  if (!raw) return;
+  const lower = raw.toLowerCase();
+
+  // ── Rich code (case-insensitive, one-time) ────────────────────────────────
+  if (lower === 'v我50' || lower === 'makemerich') {
+    redeemInput.value = '';
+    if (richCodeUsed) {
+      showNotif(t('richCodeUsedAlready'));
+    } else {
+      richCodeUsed = true;
+      saveRichUsed(true);
+      inventory.gold += 50000;
+      saveInventory();
+      showNotif(t('richCodeOk'));
+    }
+    return;
+  }
+
+  // ── Admin code (SHA-256) ──────────────────────────────────────────────────
+  if (raw.length < 4) return;
   const enc = new TextEncoder();
-  crypto.subtle.digest('SHA-256', enc.encode(val)).then(buf => {
+  crypto.subtle.digest('SHA-256', enc.encode(raw)).then(buf => {
     const hex = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
     if (hex === 'ebd72b510911af3e254a030cd891cb804e1902189eee7a0f6199472eb5e4dba2') {
       redeemInput.value = '';
+      closeSettings();
       enableAdmin();
-      lootMessage = { text: t('adminOn'), timer: 180 };
+      showNotif(t('adminOn'));
     }
   });
 });
@@ -2448,8 +2619,9 @@ function applyLanguageLabels() {
   settingsBtn.title = t('settings');
 
   // Admin panel labels
-  document.getElementById('adminTitle').textContent = t('adminTitle');
-  document.getElementById('adminHint').textContent  = t('adminHint');
+  document.getElementById('adminTitle').textContent      = t('adminTitle');
+  document.getElementById('adminBrushLabel').textContent = t('adminBrushLabel');
+  document.getElementById('adminHint').textContent       = t('adminHint');
   publishBtn.textContent   = t('publish');
   resetMapBtn.textContent  = t('resetMap');
   exitAdminBtn.textContent = t('exitAdmin');
@@ -2507,6 +2679,19 @@ resetMapBtn.addEventListener('click', () => {
   saveMapEdits();
   localStorage.removeItem('mapExplorerCanonical'); // clear full snapshot → procedural map
   location.reload();
+});
+
+document.getElementById('resetAchBtn').addEventListener('click', () => {
+  achProgress = {};
+  achUnlocked = {};
+  saveAch();
+  showNotif(settings.language === 'en' ? 'Achievements reset' : '成就已重置');
+});
+
+document.getElementById('resetRichBtn').addEventListener('click', () => {
+  richCodeUsed = false;
+  saveRichUsed(false);
+  showNotif(settings.language === 'en' ? 'Rich code quota reset' : '富豪码额度已重置');
 });
 
 // Publish: download an updated mapdata.js containing the full effective edit set.
@@ -2709,6 +2894,7 @@ function openCookUI() {
       inventory[recipe.key] = (inventory[recipe.key] || 0) + qty;
       saveInventory();
       showNotif(t('cookDone', recipe.icon, t(recipe.key)) + (qty > 1 ? ` ×${qty}` : ''));
+      progressAch('cook');
       openCookUI();
     });
   });
@@ -2727,6 +2913,72 @@ function closeCookUI() {
 
 cookCloseBtn.addEventListener('click', closeCookUI);
 cookModal.addEventListener('click', e => { if (e.target === cookModal) closeCookUI(); });
+
+// ── Achievement modal UI ──────────────────────────────────────────────────────
+const achBtn      = document.getElementById('achBtn');
+const achModal    = document.getElementById('achModal');
+const achCloseBtn = document.getElementById('achCloseBtn');
+let   achOpen     = false;
+
+function openAchUI() {
+  achOpen = true;
+  for (const k in keys) keys[k] = false;
+  const zh = settings.language !== 'en';
+  document.getElementById('achTitle').textContent   = zh ? '🏆 成就' : '🏆 Achievements';
+  achCloseBtn.textContent = zh ? '关闭' : 'Close';
+
+  const unlocked = ACHIEVEMENTS.filter(a => achUnlocked[a.id]).length;
+  document.getElementById('achSubtitle').textContent =
+    zh ? `已完成 ${unlocked} / ${ACHIEVEMENTS.length}` : `${unlocked} / ${ACHIEVEMENTS.length} completed`;
+
+  const list = document.getElementById('achList');
+  list.innerHTML = '';
+
+  // Sort: unlocked first
+  const sorted = [...ACHIEVEMENTS].sort((a, b) => (achUnlocked[b.id] ? 1 : 0) - (achUnlocked[a.id] ? 1 : 0));
+  sorted.forEach(a => {
+    const done  = !!achUnlocked[a.id];
+    const prog  = Math.min(achProgress[a.track] || 0, a.target);
+    const pct   = Math.round(prog / a.target * 100);
+
+    const row = document.createElement('div');
+    row.className = 'ach-row';
+
+    const icon = document.createElement('div');
+    icon.className = `ach-icon${done ? ' done' : ''}`;
+    icon.textContent = done ? a.icon : '🔒';
+
+    const info = document.createElement('div');
+    info.className = 'ach-info';
+    info.innerHTML = `
+      <div class="ach-name ${done ? 'done' : 'locked'}">${zh ? a.nameZh : a.nameEn}</div>
+      <div class="ach-desc">${zh ? a.descZh : a.descEn}</div>
+      ${!done ? `
+        <div class="ach-bar-wrap"><div class="ach-bar" style="width:${pct}%"></div></div>
+        <div class="ach-progress">${prog} / ${a.target}</div>
+      ` : ''}`;
+
+    const stamp = document.createElement('div');
+    stamp.className = 'ach-done-stamp';
+    if (done) {
+      stamp.textContent = zh ? '✓ 完成' : '✓ Done';
+    } else if (a.reward?.diamond) {
+      stamp.textContent = `💎×${a.reward.diamond}`;
+      stamp.style.color = '#88aaff';
+      stamp.style.fontSize = '12px';
+    }
+
+    row.append(icon, info, stamp);
+    list.appendChild(row);
+  });
+
+  achModal.classList.remove('hidden');
+}
+
+function closeAchUI() { achOpen = false; achModal.classList.add('hidden'); }
+achBtn.addEventListener('click', openAchUI);
+achCloseBtn.addEventListener('click', closeAchUI);
+achModal.addEventListener('click', e => { if (e.target === achModal) closeAchUI(); });
 
 // ── Backpack UI ───────────────────────────────────────────────────────────────
 const bagBtn      = document.getElementById('bagBtn');
@@ -2747,6 +2999,13 @@ function buildBagSection(gridEl, keys) {
       `<span class="bc-icon">${meta.icon}</span>` +
       `<span class="bc-count">${n}</span>` +
       `<span class="bc-name">${t(key) || key}</span>`;
+    // Drift bottle: clickable to open and reveal message
+    if (key === 'driftBottle') {
+      chip.style.cursor = 'pointer';
+      chip.style.border = '1px solid rgba(255,216,77,0.5)';
+      chip.title = driftBottleOpened ? t('driftMsgTitle') : '点击打开 / Click to open';
+      chip.addEventListener('click', () => openDriftBottle());
+    }
     gridEl.appendChild(chip);
     shown++;
   });
@@ -2781,7 +3040,26 @@ bagModal.addEventListener('click', e => { if (e.target === bagModal) closeBagUI(
 function refreshAdminInv() {
   document.getElementById('adminInvTitle').textContent = t('adminInvTitle');
   buildAdminInvEditor();
+  // Re-measure section height after content is built
+  const invSection = document.getElementById('invSection');
+  if (invSection && !invSection.classList.contains('collapsed'))
+    invSection.style.maxHeight = invSection.scrollHeight + 'px';
 }
+
+// ── Drift bottle modal ────────────────────────────────────────────────────────
+const driftModal    = document.getElementById('driftModal');
+const driftCloseBtn = document.getElementById('driftCloseBtn');
+
+function openDriftBottle() {
+  driftBottleOpened = true;
+  try { localStorage.setItem('mapExplorerDriftOpened', '1'); } catch(_) {}
+  document.getElementById('driftMsgTitle').textContent = t('driftMsgTitle');
+  document.getElementById('driftMsgBody').textContent  = t('driftMsgBody');
+  driftCloseBtn.textContent = t('driftMsgClose');
+  driftModal.classList.remove('hidden');
+}
+driftCloseBtn.addEventListener('click', () => driftModal.classList.add('hidden'));
+driftModal.addEventListener('click', e => { if (e.target === driftModal) driftModal.classList.add('hidden'); });
 
 renderStaticMap();
 loop();
