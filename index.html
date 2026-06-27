@@ -22,7 +22,7 @@
     #settingsBtn:hover { background: rgba(40,40,44,0.95); transform: rotate(45deg); }
 
     #bagBtn {
-      position: fixed; top: 12px; left: 12px; z-index: 20;
+      position: fixed; top: 12px; right: 62px; z-index: 20;
       width: 42px; height: 42px; border-radius: 50%;
       border: 1px solid rgba(255,255,255,0.18);
       background: rgba(18,18,20,0.88); color: #ffd84d;
@@ -32,6 +32,35 @@
       font-family: -apple-system,"SF Pro Display",system-ui,"Segoe UI",Roboto,Arial,sans-serif;
     }
     #bagBtn:hover { background: rgba(40,40,44,0.95); transform: scale(1.1); }
+
+    /* ── Notification layer (above ALL modals) ───────────────────── */
+    #notifLayer {
+      position: fixed; top: 64px; left: 50%; transform: translateX(-50%);
+      z-index: 9999; pointer-events: none; text-align: center;
+      font-family: -apple-system,"SF Pro Display",system-ui,"Segoe UI",Roboto,Arial,sans-serif;
+    }
+    #notifBox {
+      display: inline-block; padding: 10px 22px; border-radius: 12px;
+      background: rgba(22,22,26,0.97); color: #ffd84d;
+      border: 1px solid rgba(255,216,77,0.4);
+      font-size: 14px; font-weight: 600;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      transition: opacity .25s; opacity: 1;
+    }
+    #notifBox.hidden { opacity: 0; }
+
+    /* ── Quantity stepper (shared by shop + cook) ────────────────── */
+    .qty-row { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+    .qty-row button {
+      width: 24px; height: 24px; border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 6px; background: rgba(255,255,255,0.08); color: #f0f0f2;
+      font-size: 15px; cursor: pointer; padding: 0; line-height: 1;
+    }
+    .qty-row button:hover { background: rgba(255,255,255,0.16); }
+    .qty-num {
+      width: 32px; text-align: center; font-size: 13px; font-weight: 600;
+      color: #ffd84d; user-select: none;
+    }
 
     #settingsModal {
       position: fixed; inset: 0; z-index: 30;
@@ -261,6 +290,7 @@
 <body>
   <canvas id="game"></canvas>
 
+  <div id="notifLayer"><div id="notifBox" class="hidden"><span id="notifText"></span></div></div>
   <button id="bagBtn" title="Backpack">🎒</button>
   <button id="settingsBtn" title="Settings">⚙</button>
 

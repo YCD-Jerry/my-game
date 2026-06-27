@@ -66,8 +66,28 @@ const inventory  = {
 };
 let   lootMessage = null; // { text, timer }
 let   shopOpen    = false;
+
+function saveInventory() {
+  try { localStorage.setItem('mapExplorerInventory', JSON.stringify(inventory)); } catch (_) {}
+}
+// Restore saved inventory on load
+try {
+  const inv = JSON.parse(localStorage.getItem('mapExplorerInventory') || 'null');
+  if (inv) Object.assign(inventory, inv);
+} catch (_) {}
 let   cookOpen    = false;
 let   bagOpen     = false;
+
+// ── DOM notification (above all modals) ──────────────────────────────────────
+let _notifTimer = null;
+function showNotif(text) {
+  const box = document.getElementById('notifBox');
+  if (!box) { lootMessage = { text, timer: 180 }; return; }
+  document.getElementById('notifText').textContent = text;
+  box.classList.remove('hidden');
+  if (_notifTimer) clearTimeout(_notifTimer);
+  _notifTimer = setTimeout(() => box.classList.add('hidden'), 2800);
+}
 
 // ── Tree chopping ─────────────────────────────────────────────────────────────
 const CHOP_HITS   = 4;
@@ -335,6 +355,30 @@ function buildMap() {
     if (ds.flower) decorations.push({ col: ds.col, row: ds.row, type: ds.flower });
   }
 
+  // ── Canonical admin snapshot ──────────────────────────────────────────────
+  // If the admin has ever saved the map, restore the exact tile state they set.
+  // This makes admin changes completely independent of procedural generation —
+  // code updates never reset the map the admin configured.
+  try {
+    // Server-published canonical takes priority over local admin snapshot
+    const serverCanon = (typeof window !== 'undefined' && window.PUBLISHED_CANONICAL) || null;
+    const localCanon  = JSON.parse(localStorage.getItem('mapExplorerCanonical') || 'null');
+    const canon = serverCanon || localCanon;
+    if (canon && Array.isArray(canon.map) && canon.map.length === ROWS * COLS) {
+      canon.map.forEach((v, i) => { map[Math.floor(i / COLS)][i % COLS] = v; });
+      // Restore decorations, but keep the hard-coded dig-spot emerald markers
+      decorations.length = 0;
+      for (const d of (canon.decos || [])) decorations.push(d);
+      for (const ds of digSpots) {
+        if (ds.flower && !decorations.some(d => d.col === ds.col && d.row === ds.row))
+          decorations.push({ col: ds.col, row: ds.row, type: ds.flower });
+      }
+      // Restore palmOnSand for palms that are on sand tiles
+      for (const k in palmOnSand) delete palmOnSand[k];
+      for (const [ks, v] of Object.entries(canon.palmOnSand || {})) palmOnSand[ks] = v;
+    }
+  } catch (_) {}
+
   // Initialise bridge tiles for each pond
   for (const p of ponds) {
     const tiles = [];
@@ -415,6 +459,20 @@ let mapEdits = {};
 try { mapEdits = JSON.parse(localStorage.getItem('mapExplorerEdits') || '{}'); } catch (_) {}
 function saveMapEdits() {
   try { localStorage.setItem('mapExplorerEdits', JSON.stringify(mapEdits)); } catch (_) {}
+}
+
+// Save the COMPLETE current map state so code updates never reset admin changes.
+function saveCanonical() {
+  const flat = [];
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      flat.push(map[r][c]);
+  const decos = decorations.map(d => ({ col: d.col, row: d.row, type: d.type }));
+  const ps = {};
+  for (const k in palmOnSand) ps[k] = true;
+  try {
+    localStorage.setItem('mapExplorerCanonical', JSON.stringify({ map: flat, decos, palmOnSand: ps }));
+  } catch (_) {}
 }
 
 // What terrain brush best describes the current map tile?
@@ -734,28 +792,51 @@ canvas.addEventListener('click', e => {
     }
   }
 
-  // 2) tree chopping — click on a tree tile while standing adjacent
   const rect = canvas.getBoundingClientRect();
   const wx = (e.clientX - rect.left) + Math.round(camX);
   const wy = (e.clientY - rect.top)  + Math.round(camY);
   const tc = Math.floor(wx / TILE), tr = Math.floor(wy / TILE);
+  if (tc < 0 || tc >= COLS || tr < 0 || tr >= ROWS) return;
 
-  if (tc >= 0 && tc < COLS && tr >= 0 && tr < ROWS &&
-      TREE_TILE_TYPES.has(map[tr][tc]) &&
-      Math.max(Math.abs(tc - player.col), Math.abs(tr - player.row)) <= 1) {
-    chopTree(tc, tr);
+  const sc = player.moving ? player.targetCol : player.col;
+  const sr = player.moving ? player.targetRow : player.row;
+  const adj = Math.max(Math.abs(tc - player.col), Math.abs(tr - player.row)) <= 1;
+
+  // 2) tree: chop if adjacent, else walk to nearest adjacent tile
+  if (TREE_TILE_TYPES.has(map[tr][tc])) {
+    if (adj) { chopTree(tc, tr); return; }
+    walkAdjacentTo(sc, sr, tc, tr);
     return;
   }
 
-  // 3) otherwise, walk to the clicked tile
-  const sc = player.moving ? player.targetCol : player.col;
-  const sr = player.moving ? player.targetRow : player.row;
-  const path = findPath(sc, sr, tc, tr);
-  if (path.length) {
-    movePath   = path;
-    moveTarget = { col: tc, row: tr, t: 40 };
+  // 3) unwalkable (building, chest, water…) → walk to nearest adjacent tile
+  if (!isWalkable(tr, tc)) {
+    walkAdjacentTo(sc, sr, tc, tr);
+    return;
   }
+
+  // 4) walkable → move directly there
+  const path = findPath(sc, sr, tc, tr);
+  if (path.length) { movePath = path; moveTarget = { col: tc, row: tr, t: 40 }; }
 });
+
+// Walk to the nearest walkable tile adjacent to (tc, tr).
+function walkAdjacentTo(sc, sr, tc, tr) {
+  let best = null, bestDist = Infinity;
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (!dr && !dc) continue;
+      const nr = tr + dr, nc = tc + dc;
+      if (!isWalkable(nr, nc)) continue;
+      const d = Math.abs(nc - sc) + Math.abs(nr - sr);
+      if (d < bestDist) { bestDist = d; best = [nc, nr]; }
+    }
+  }
+  if (!best) return;
+  const [bc, br] = best;
+  const path = findPath(sc, sr, bc, br);
+  if (path.length) { movePath = path; moveTarget = { col: bc, row: br, t: 40 }; }
+}
 
 // Paint one tile with the active brush, persist it, and refresh the visuals.
 // 'grass' acts as a full eraser; terrain brushes keep any object already there
@@ -786,6 +867,7 @@ function paintTile(c, r) {
   mapEdits[k] = st;
   applyTileState(c, r, st);
   saveMapEdits();
+  saveCanonical(); // full snapshot so code updates never reset the map
   renderStaticMap();
   interactions = buildInteractions(); // collections changed
 }
@@ -888,6 +970,7 @@ function doOpenChest(ch) {
   inventory.diamond   += diamond;
   inventory.redflower += spec.f;
   lootMessage = { text: t('chestLoot', t(spec.name), gold, diamond, spec.f), timer: 220 };
+  saveInventory();
 }
 
 function doDig(ds) { ds.dug = true; }
@@ -902,6 +985,7 @@ function doOpenDigChest(ds) {
   inventory.diamond   += diamond;
   inventory.redflower += spec.f;
   lootMessage = { text: t('chestLoot', t(spec.name), gold, diamond, spec.f), timer: 240 };
+  saveInventory();
 }
 
 function doPickApple(at) {
@@ -909,12 +993,14 @@ function doPickApple(at) {
   inventory.apple += at.count;
   lootMessage = { text: t('apple', at.count), timer: 180 };
   renderTreeCanvas();
+  saveInventory();
 }
 
 function doPickCherry(ct) {
   ct.flowers--;
   inventory.redflower += 1;
   lootMessage = { text: t('flower', 1), timer: 180 };
+  saveInventory();
 }
 
 function doPickCoconut(pt) {
@@ -923,6 +1009,7 @@ function doPickCoconut(pt) {
   inventory.coconut += n;
   lootMessage = { text: t('coconut', n), timer: 180 };
   renderTreeCanvas();
+  saveInventory();
 }
 
 function chopTree(c, r) {
@@ -1957,6 +2044,7 @@ function update() {
           timer: 150,
         };
         fallenTrees.splice(i, 1);
+        saveInventory();
         break;
       }
     }
@@ -2108,14 +2196,32 @@ function draw() {
     ctx.fillText('🪵', fx + 16, fy + 10);
   }
 
-  // ── Player ────────────────────────────────────────────────────────────────
+  // ── Player (drawn before tree overlay so trees appear on top) ───────────────
   const px = Math.round(player.px), py = Math.round(player.py);
   drawPlayer(ctx, px, py, player.frame, player.facing);
 
-  // ── Tree + monument + castle overlay ─────────────────────────────────────
+  // ── Tree + monument overlay (on top of player) ────────────────────────────
   ctx.drawImage(treeCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
 
-  // ── Shaking tree animation (drawn on top of the treeCanvas to show offset) ─
+  // ── Occlusion ghost (gray silhouette shown through trees) ────────────────
+  const PAD = 12;
+  const bx  = px - PAD, by = py - PAD - 6;
+  const bw  = 32 + PAD * 2, bh = 36 + PAD * 2 + 6;
+  occCtx.clearRect(0, 0, bw, bh);
+  drawPlayer(occCtx, PAD, PAD + 6, player.frame, player.facing);
+  occCtx.globalCompositeOperation = 'source-in';
+  occCtx.fillStyle = '#d7d7dc';
+  occCtx.fillRect(0, 0, bw, bh);
+  occCtx.globalCompositeOperation = 'source-over';
+  occCtx.globalCompositeOperation = 'destination-in';
+  occCtx.drawImage(treeCanvas, bx, by, bw, bh, 0, 0, bw, bh);
+  occCtx.globalCompositeOperation = 'source-over';
+  ctx.save();
+  ctx.globalAlpha = 0.92;
+  ctx.drawImage(occCanvas, bx, by);
+  ctx.restore();
+
+  // ── Shaking tree animation ────────────────────────────────────────────────
   if (shakingTree && shakingTree.timer > 0) {
     const { col: sc2, row: sr2, type: st2, timer: stm } = shakingTree;
     const tx = sc2 * TILE, ty = sr2 * TILE;
@@ -2135,25 +2241,7 @@ function draw() {
     ctx.restore();
   }
 
-  // ── Occlusion ghost (player shown through overlay objects) ────────────────
-  const PAD = 12;
-  const bx  = px - PAD, by = py - PAD - 6;
-  const bw  = 32 + PAD * 2, bh = 36 + PAD * 2 + 6;
-  occCtx.clearRect(0, 0, bw, bh);
-  drawPlayer(occCtx, PAD, PAD + 6, player.frame, player.facing);
-  occCtx.globalCompositeOperation = 'source-in';
-  occCtx.fillStyle = '#d7d7dc';
-  occCtx.fillRect(0, 0, bw, bh);
-  occCtx.globalCompositeOperation = 'source-over';
-  occCtx.globalCompositeOperation = 'destination-in';
-  occCtx.drawImage(treeCanvas, bx, by, bw, bh, 0, 0, bw, bh);
-  occCtx.globalCompositeOperation = 'source-over';
-  ctx.save();
-  ctx.globalAlpha = 0.92;
-  ctx.drawImage(occCanvas, bx, by);
-  ctx.restore();
-
-  // ── Rainbows (topmost world layer) ────────────────────────────────────────
+  // ── Rainbows ──────────────────────────────────────────────────────────────
   for (const p of ponds) if (p.rainbowAnim > 0) drawRainbow(p);
 
   // ── Editor hover highlight ────────────────────────────────────────────────
@@ -2417,19 +2505,29 @@ exitAdminBtn.addEventListener('click', disableAdmin);
 resetMapBtn.addEventListener('click', () => {
   mapEdits = {};
   saveMapEdits();
-  location.reload(); // rebuild the pristine procedural map
+  localStorage.removeItem('mapExplorerCanonical'); // clear full snapshot → procedural map
+  location.reload();
 });
 
 // Publish: download an updated mapdata.js containing the full effective edit set.
 // Replace mapdata.js on the website to make these edits the shared baseline.
 publishBtn.addEventListener('click', () => {
-  // Merge local edits into the shared baseline.
   const merged = Object.assign({}, publishedMap, mapEdits);
 
-  // Export mapdata.js — upload this file to the server to push changes to all players.
+  // Build the full canonical snapshot for the published file
+  const flat = [];
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      flat.push(map[r][c]);
+  const decos = decorations.map(d => ({ col: d.col, row: d.row, type: d.type }));
+  const ps = {};
+  for (const k in palmOnSand) ps[k] = true;
+
   const content =
     '// Official published map for Map Explorer (generated by the in-game editor).\n' +
-    'window.PUBLISHED_MAP = ' + JSON.stringify(merged) + ';\n';
+    'window.PUBLISHED_MAP = ' + JSON.stringify(merged) + ';\n' +
+    '// Full canonical map snapshot — loaded on startup to bypass procedural generation.\n' +
+    'window.PUBLISHED_CANONICAL = ' + JSON.stringify({ map: flat, decos, palmOnSand: ps }) + ';\n';
   const blob = new Blob([content], { type: 'text/javascript' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
@@ -2437,8 +2535,6 @@ publishBtn.addEventListener('click', () => {
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 
-  // Promote local edits into the in-memory published baseline and clear them.
-  // This avoids double-application on next load once mapdata.js is on the server.
   Object.assign(publishedMap, merged);
   mapEdits = {};
   saveMapEdits();
@@ -2463,6 +2559,7 @@ function buildAdminInvEditor() {
       const v = Math.max(0, parseInt(inp.value) || 0);
       inventory[key] = v;
       inp.value = v;
+      saveInventory();
     });
     row.appendChild(ic); row.appendChild(nm); row.appendChild(inp);
     adminInvList.appendChild(row);
@@ -2482,28 +2579,54 @@ function openShopUI() {
   shopGoldEl.textContent  = t('shopGold', inventory.gold);
   shopItemEl.innerHTML    = '';
   SHOP_ITEMS.forEach(item => {
+    const maxBuy = Math.floor(inventory.gold / item.price);
+    let qty = Math.min(1, maxBuy);
+
     const div = document.createElement('div');
     div.className = 'shop-item';
-    div.innerHTML = `
-      <span class="si-icon">${item.icon}</span>
-      <div class="si-info">
-        <div class="si-name">${t(item.key)}</div>
-        <div class="si-price">${t('shopPrice', item.price)}</div>
-      </div>
-      <button class="si-buy">${t('shopBuy')}</button>`;
-    const btn = div.querySelector('.si-buy');
-    btn.disabled = inventory.gold < item.price;
-    btn.addEventListener('click', () => {
-      if (inventory.gold < item.price) {
-        lootMessage = { text: t('shopNotEnough'), timer: 120 };
-        return;
-      }
-      inventory.gold -= item.price;
-      inventory[item.key]++;
-      lootMessage = { text: t('shopBought', item.icon, 1), timer: 150 };
-      openShopUI(); // refresh gold display + button states
-    });
+
+    const iconEl  = document.createElement('span'); iconEl.className = 'si-icon'; iconEl.textContent = item.icon;
+    const info    = document.createElement('div');  info.className = 'si-info';
+    const nameEl  = document.createElement('div');  nameEl.className = 'si-name'; nameEl.textContent = t(item.key);
+    const priceEl = document.createElement('div');  priceEl.className = 'si-price';
+    info.append(nameEl, priceEl);
+
+    // Quantity stepper
+    const qRow  = document.createElement('div');  qRow.className = 'qty-row';
+    const qMinus= document.createElement('button'); qMinus.textContent = '−';
+    const qNum  = document.createElement('span');  qNum.className = 'qty-num';
+    const qPlus = document.createElement('button'); qPlus.textContent = '+';
+    qRow.append(qMinus, qNum, qPlus);
+
+    const buyBtn = document.createElement('button'); buyBtn.className = 'si-buy';
+    buyBtn.textContent = t('shopBuy');
+
+    div.append(iconEl, info, qRow, buyBtn);
     shopItemEl.appendChild(div);
+
+    const refresh = () => {
+      const max = Math.floor(inventory.gold / item.price);
+      qty = Math.max(1, Math.min(qty, max || 1));
+      qNum.textContent  = qty;
+      priceEl.textContent = t('shopPrice', item.price * qty);
+      buyBtn.disabled   = inventory.gold < item.price * qty;
+      qMinus.disabled   = qty <= 1;
+      qPlus.disabled    = qty >= Math.max(1, max);
+    };
+    refresh();
+
+    qMinus.addEventListener('click', () => { qty = Math.max(1, qty - 1); refresh(); });
+    qPlus.addEventListener('click',  () => { qty = Math.min(Math.floor(inventory.gold / item.price) || 1, qty + 1); refresh(); });
+
+    buyBtn.addEventListener('click', () => {
+      const total = item.price * qty;
+      if (inventory.gold < total) { showNotif(t('shopNotEnough')); return; }
+      inventory.gold -= total;
+      inventory[item.key] += qty;
+      saveInventory();
+      showNotif(t('shopBought', item.icon, qty));
+      openShopUI();
+    });
   });
   shopModal.classList.remove('hidden');
 }
@@ -2534,36 +2657,67 @@ function openCookUI() {
   // Sort: cookable first
   const sorted = [...RECIPES].sort((a, b) => (canCook(b) ? 1 : 0) - (canCook(a) ? 1 : 0));
   sorted.forEach(recipe => {
-    const cookable = canCook(recipe);
+    const maxQ = maxCookable(recipe);
+    let qty = Math.min(1, maxQ);
+
     const row = document.createElement('div');
     row.className = 'recipe-row';
 
-    const needsHtml = Object.entries(recipe.needs).map(([k, n]) => {
-      const have = inventory[k] || 0;
-      const ok   = have >= n;
-      const meta = INVENTORY_META.find(m => m.key === k);
-      const icon = meta ? meta.icon : '';
-      return `<span class="rr-chip ${ok ? 'ok' : 'bad'}">${icon} ${t(k) || k} ${have}/${n}</span>`;
-    }).join('');
+    const iconEl = document.createElement('span'); iconEl.className = 'rr-icon'; iconEl.textContent = recipe.icon;
+    const info   = document.createElement('div');  info.className = 'rr-info';
+    const nameEl = document.createElement('div');  nameEl.className = 'rr-name'; nameEl.textContent = t(recipe.key);
+    const chips  = document.createElement('div');  chips.className = 'rr-needs';
+    info.append(nameEl, chips);
 
-    row.innerHTML = `
-      <span class="rr-icon">${recipe.icon}</span>
-      <div class="rr-info">
-        <div class="rr-name">${t(recipe.key)}</div>
-        <div class="rr-needs">${needsHtml}</div>
-      </div>
-      <button ${cookable ? '' : 'disabled'}>${t('cook')}</button>`;
+    const qRow   = document.createElement('div');  qRow.className = 'qty-row';
+    const qMinus = document.createElement('button'); qMinus.textContent = '−';
+    const qNum   = document.createElement('span');  qNum.className = 'qty-num';
+    const qPlus  = document.createElement('button'); qPlus.textContent = '+';
+    qRow.append(qMinus, qNum, qPlus);
+    if (!maxQ) qRow.style.display = 'none';
 
-    row.querySelector('button').addEventListener('click', () => {
-      if (!canCook(recipe)) { lootMessage = { text: t('cookMissing'), timer: 120 }; return; }
-      Object.entries(recipe.needs).forEach(([k, n]) => { inventory[k] -= n; });
-      inventory[recipe.key] = (inventory[recipe.key] || 0) + 1;
-      lootMessage = { text: t('cookDone', recipe.icon, t(recipe.key)), timer: 180 };
-      openCookUI(); // refresh ingredient counts
-    });
+    const cookBtn = document.createElement('button');
+    row.append(iconEl, info, qRow, cookBtn);
     cookRecipeEl.appendChild(row);
+
+    const refresh = () => {
+      chips.innerHTML = '';
+      Object.entries(recipe.needs).forEach(([k, n]) => {
+        const have = inventory[k] || 0, need = n * qty;
+        const meta = INVENTORY_META.find(m => m.key === k);
+        const chip = document.createElement('span');
+        chip.className = `rr-chip ${have >= need ? 'ok' : 'bad'}`;
+        chip.textContent = `${meta ? meta.icon : ''} ${t(k) || k} ${have}/${need}`;
+        chips.appendChild(chip);
+      });
+      const cur = maxCookable(recipe);
+      qty = Math.max(1, Math.min(qty, cur || 1));
+      qNum.textContent = qty;
+      qMinus.disabled  = qty <= 1;
+      qPlus.disabled   = qty >= Math.max(1, cur);
+      cookBtn.textContent = t('cook');
+      cookBtn.disabled    = cur < 1;
+    };
+    refresh();
+
+    qMinus.addEventListener('click', () => { qty = Math.max(1, qty - 1); refresh(); });
+    qPlus.addEventListener('click',  () => { qty = Math.min(maxCookable(recipe) || 1, qty + 1); refresh(); });
+
+    cookBtn.addEventListener('click', () => {
+      if (maxCookable(recipe) < qty) { showNotif(t('cookMissing')); return; }
+      Object.entries(recipe.needs).forEach(([k, n]) => { inventory[k] -= n * qty; });
+      inventory[recipe.key] = (inventory[recipe.key] || 0) + qty;
+      saveInventory();
+      showNotif(t('cookDone', recipe.icon, t(recipe.key)) + (qty > 1 ? ` ×${qty}` : ''));
+      openCookUI();
+    });
   });
   cookModal.classList.remove('hidden');
+}
+
+// How many times can this recipe be cooked with current inventory?
+function maxCookable(recipe) {
+  return Math.min(...Object.entries(recipe.needs).map(([k, n]) => Math.floor((inventory[k] || 0) / n)));
 }
 
 function closeCookUI() {
