@@ -62,6 +62,8 @@ const inventory  = {
   friedCabbage: 0, pepperCabbage: 0, cabbagePork: 0,
   redBraisedPork: 0, friedPork: 0, mincedMeatRice: 0,
   tomatoSoup: 0, sweetPancake: 0,
+  // fish (from fishing)
+  grass_carp: 0, red_carp: 0, goldfish: 0, fish_meat: 0,
   // materials (from chopping trees)
   lumber: 0, pinecone: 0,
   // special items
@@ -199,8 +201,11 @@ const SHOP_ITEMS = [
   { key: 'flour',   icon: '🌾', price: 2 },
   { key: 'salt',    icon: '🧂', price: 2 },
   { key: 'sugar',   icon: '🍬', price: 2 },
-  { key: 'pepper',  icon: '🌶️', price: 2 },
-  { key: 'meat',    icon: '🥩', price: 2 },
+  { key: 'pepper',     icon: '🌶️', price: 2 },
+  { key: 'meat',       icon: '🥩', price: 2 },
+  { key: 'coconut',    icon: '🥥', price: 5 },
+  { key: 'strawberry', icon: '🍓', price: 5 },
+  { key: 'blueberry',  icon: '🫐', price: 5 },
 ];
 
 // ── Stove ─────────────────────────────────────────────────────────────────────
@@ -248,6 +253,9 @@ const INVENTORY_META = [
   { key: 'meat',    icon: '🥩' },
   // cooked dishes (inherit icon from RECIPES)
   ...RECIPES.map(r => ({ key: r.key, icon: r.icon })),
+  // fish
+  { key: 'grass_carp', icon: '🐟' }, { key: 'red_carp', icon: '🐠' },
+  { key: 'goldfish',   icon: '🐡' }, { key: 'fish_meat', icon: '🍣' },
   // materials
   { key: 'lumber',      icon: '🪵' },
   { key: 'pinecone',    icon: '🌰' },
@@ -261,8 +269,9 @@ const BAG_INGREDIENT_KEYS = [
   'strawberry', 'blueberry',
   'redflower', 'apple', 'coconut',
   'cabbage', 'tomato', 'egg', 'rice', 'flour',
-  'salt', 'sugar', 'pepper', 'meat',
+  'salt', 'sugar', 'pepper', 'meat', 'fish_meat',
 ];
+const BAG_FISH_KEYS     = ['grass_carp', 'red_carp', 'goldfish'];
 const BAG_FOOD_KEYS     = RECIPES.map(r => r.key);
 const BAG_MATERIAL_KEYS = ['lumber', 'pinecone', 'driftBottle'];
 
@@ -442,8 +451,8 @@ function buildMap() {
       if (c === SHOP_COL  && r === SHOP_ROW)  continue;
       if (c === STOVE_COL && r === STOVE_ROW) continue;
       const v = rng(c, r, 42);
-      if      (v < 0.010) decorations.push({ col: c, row: r, type: 'sunflower' });
-      else if (v < 0.060) decorations.push({ col: c, row: r, type: 'flower' });
+      if      (v < 0.006) decorations.push({ col: c, row: r, type: 'sunflower' });
+      else if (v < 0.036) decorations.push({ col: c, row: r, type: 'flower' });
     }
   }
 
@@ -463,9 +472,12 @@ function buildMap() {
     const canon = serverCanon || localCanon;
     if (canon && Array.isArray(canon.map) && canon.map.length === ROWS * COLS) {
       canon.map.forEach((v, i) => { map[Math.floor(i / COLS)][i % COLS] = v; });
-      // Restore decorations, but keep the hard-coded dig-spot emerald markers
+      // Restore decorations — keep only 2/5 of flowers/sunflowers (deterministic thinning)
       decorations.length = 0;
-      for (const d of (canon.decos || [])) decorations.push(d);
+      for (const d of (canon.decos || [])) {
+        if ((d.type === 'flower' || d.type === 'sunflower') && rng(d.col, d.row, 919) >= 0.6) continue;
+        decorations.push(d);
+      }
       for (const ds of digSpots) {
         if (ds.flower && !decorations.some(d => d.col === ds.col && d.row === ds.row))
           decorations.push({ col: ds.col, row: ds.row, type: ds.flower });
@@ -552,6 +564,16 @@ const bctx         = berryCanvas.getContext('2d');
 // Fixed particle pool — objects are reset on each pick, never allocated mid-game
 const PARTICLE_POOL = Array.from({ length: 10 }, () =>
   ({ x: 0, y: 0, vx: 0, vy: 0, life: 0, size: 0 }));
+
+// ── Fishing system ────────────────────────────────────────────────────────────
+const FISH_TYPES = [
+  { key: 'grass_carp', nameZh: '草鱼',  nameEn: 'Grass Carp', prob: 0.50, decay: 8,  boost: 15, hold: 3 },
+  { key: 'red_carp',   nameZh: '红鲤鱼', nameEn: 'Red Carp',   prob: 0.85, decay: 12, boost: 12, hold: 4 },
+  { key: 'goldfish',   nameZh: '金鱼',   nameEn: 'Goldfish',   prob: 1.00, decay: 20, boost: 8,  hold: 6 },
+];
+const fishingSpots = [];
+let fishingOpen = false;
+let fishing = null; // { phase, hookAngle, lineLen, lineLenTarget, waitTimer, biteAnim, fish, tension, holdTimer, result, resultTimer, swimFish, bubbles }
 
 // ── Map editor: persistent layered tile edits (admin mode) ────────────────────
 // Each edited tile is stored as { t: terrainBrush, o?: objectBrush } so an object
@@ -711,6 +733,7 @@ applyEdits(mapEdits);
 generateBerryBushes();
 loadBerryState();
 renderBerryCanvas();
+generateFishingSpots();
 
 // ── Player ────────────────────────────────────────────────────────────────────
 const SPEED = 3;
@@ -803,6 +826,9 @@ const I18N = {
     choppedLumber: '木材 x1', choppedPine: (n) => `木材 x1  松子 x${n}`,
     strawberry: '草莓', blueberry: '蓝莓',
     pressPickStrawberry: '按 F 采摘草莓', pressPickBlueberry: '按 F 采摘蓝莓',
+    grass_carp: '草鱼', red_carp: '红鲤鱼', goldfish: '金鱼', fish_meat: '鱼肉',
+    bagFish: '鱼类', pressGFish: '[G] 钓鱼',
+    slaughterHint: '右键宰杀 → 鱼肉', slaughterDone: '鱼肉 x1',
   },
   en: {
     settings: 'Settings', gender: 'Gender', male: 'Male', female: 'Female',
@@ -855,6 +881,9 @@ const I18N = {
     choppedLumber: 'Lumber x1', choppedPine: (n) => `Lumber x1  Pine Cone x${n}`,
     strawberry: 'Strawberry', blueberry: 'Blueberry',
     pressPickStrawberry: 'Press F to pick Strawberry', pressPickBlueberry: 'Press F to pick Blueberry',
+    grass_carp: 'Grass Carp', red_carp: 'Red Carp', goldfish: 'Goldfish', fish_meat: 'Fish Meat',
+    bagFish: 'Fish', pressGFish: '[G] Fish',
+    slaughterHint: 'Right-click to slaughter → Fish Meat', slaughterDone: 'Fish Meat x1',
   },
 };
 function t(key, ...args) {
@@ -866,11 +895,23 @@ function t(key, ...args) {
 let settingsOpen = false;
 const keys = {};
 function isTyping(e) {
-  return settingsOpen || shopOpen || cookOpen || bagOpen || achOpen || (e.target && e.target.tagName === 'INPUT');
+  return settingsOpen || shopOpen || cookOpen || bagOpen || achOpen || fishingOpen || (e.target && e.target.tagName === 'INPUT');
 }
 window.addEventListener('keydown', e => {
+  // Fishing overlay captures its own keys before isTyping
+  if (fishingOpen) {
+    if (!e.repeat) {
+      if (e.key === ' ' || e.key === 'Spacebar') { handleFishingSpace(); e.preventDefault(); return; }
+      if (e.key === 'Escape') { closeFishing(); return; }
+    }
+    return; // eat all other keys while fishing
+  }
+
   if (isTyping(e)) return;
   keys[e.key] = true;
+
+  // G key: open fishing when near a spot
+  if ((e.key === 'g' || e.key === 'G') && !e.repeat) { tryOpenFishing(); return; }
 
   // F confirms the currently selected interaction
   if ((e.key === 'f' || e.key === 'F') && !e.repeat) {
@@ -917,10 +958,28 @@ function eventToTile(e) {
 
 // Click directly on an interaction icon to select + activate it,
 // or click anywhere on the map to walk there.
-let interactionRects = []; // {x, y, w, h, index} in screen space, set during draw
+let interactionRects  = []; // {x, y, w, h, index} in screen space, set during draw
+let fishingExitRect   = null; // {x, y, w, h} of the fishing Exit button
 let movePath   = [];       // queue of {col, row} tiles for click-to-move
 let moveTarget = null;     // {col, row, t} destination marker for drawing
 canvas.addEventListener('click', e => {
+  // Fishing overlay intercepts all clicks
+  if (fishingOpen) {
+    // Exit button
+    if (fishingExitRect) {
+      const r = fishingExitRect;
+      if (e.clientX >= r.x && e.clientX <= r.x + r.w &&
+          e.clientY >= r.y && e.clientY <= r.y + r.h) {
+        closeFishing(); return;
+      }
+    }
+    // Click anywhere else acts like Space (cast / reel) — result screen ignored, use Exit button
+    if (fishing && (fishing.phase === 'cast' || fishing.phase === 'pull')) {
+      handleFishingSpace(); return;
+    }
+    return;
+  }
+
   if (settingsOpen || adminMode) return; // in admin mode clicks paint instead
 
   // 1) interaction icon?
@@ -1145,7 +1204,7 @@ function doOpenDigChest(ds) {
 function doPickApple(at) {
   at.picked = true;
   inventory.apple += at.count;
-  lootMessage = { text: t('apple', at.count), timer: 180 };
+  lootMessage = { text: t('apple') + ' x' + at.count, timer: 180 };
   renderTreeCanvas();
   saveInventory();
 }
@@ -1161,7 +1220,7 @@ function doPickCoconut(pt) {
   const n = pt.coconuts;
   pt.coconuts = 0;
   inventory.coconut += n;
-  lootMessage = { text: t('coconut', n), timer: 180 };
+  lootMessage = { text: t('coconut') + ' x' + n, timer: 180 };
   renderTreeCanvas();
   saveInventory();
 }
@@ -2111,30 +2170,8 @@ function renderBerryCanvas() {
   }
 }
 
-// Floating hint drawn in screen space above each reachable berry bush
-function drawBerryHints() {
-  if (settingsOpen || shopOpen || cookOpen || bagOpen || achOpen) return;
-  const zh = settings.language !== 'en';
-  ctx.save();
-  ctx.font = '600 11px ' + UI_FONT;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  for (const b of berryBushes) {
-    if (b.picked || !near(b)) continue;
-    const sx = Math.round(b.col * TILE + TILE / 2 - camX);
-    const sy = Math.round(b.row * TILE - 8 - camY);
-    const label = zh
-      ? (b.type === 'strawberry' ? '[F] 采摘草莓' : '[F] 采摘蓝莓')
-      : (b.type === 'strawberry' ? '[F] Pick Strawberry' : '[F] Pick Blueberry');
-    const tw = ctx.measureText(label).width + 14, th = 20;
-    roundRectPath(ctx, sx - tw / 2, sy - th, tw, th, 6);
-    ctx.fillStyle = 'rgba(18,18,20,0.92)'; ctx.fill();
-    ctx.strokeStyle = b.type === 'strawberry' ? 'rgba(220,60,60,0.7)' : 'rgba(80,80,220,0.7)';
-    ctx.lineWidth = 1.2; ctx.stroke();
-    ctx.fillStyle = '#ffd84d';
-    ctx.fillText(label, sx, sy - th / 2 + 1);
-  }
-  ctx.restore();
-}
+// Berry world-space hints removed — interaction bar above player already shows the prompt.
+function drawBerryHints() {}
 
 function drawStrawberryBush(g, x, y, picked) {
   if (picked) {
@@ -2185,6 +2222,337 @@ function drawBlueberryBush(g, x, y, picked) {
       g.fillRect(x + bx2 + di - 0.5, y + by2 - 4, 1, 2);
     }
   }
+}
+
+// ── Fishing functions ─────────────────────────────────────────────────────────
+function generateFishingSpots() {
+  fishingSpots.length = 0;
+  for (let i = 0; i < ponds.length; i++) {
+    const p = ponds[i];
+    const rxCeil = Math.ceil(p.rx);
+    // Alternate right / left — never place on the south (bottom) edge
+    let waterCol, waterRow, col, row;
+    if (i % 2 === 0) {
+      waterCol = p.cx + rxCeil;  waterRow = p.cy;
+      col      = waterCol + 1;   row      = p.cy;
+    } else {
+      waterCol = p.cx - rxCeil;  waterRow = p.cy;
+      col      = waterCol - 1;   row      = p.cy;
+    }
+    col = Math.max(1, Math.min(COLS - 2, col));
+    fishingSpots.push({ col, row, waterCol, waterRow });
+  }
+}
+
+function tryOpenFishing() {
+  for (const spot of fishingSpots) {
+    if (Math.max(Math.abs(spot.col - player.col), Math.abs(spot.row - player.row)) <= 2) {
+      openFishing(); return;
+    }
+  }
+}
+
+function openFishing() {
+  fishingOpen = true;
+  for (const k in keys) keys[k] = false;
+  movePath = []; moveTarget = null;
+  const W = canvas.width, H = canvas.height;
+  fishing = {
+    phase: 'cast',
+    lineLen: 0, lineLenTarget: H * 0.42,
+    waitTimer: 0, biteAnim: 0, fish: null,
+    tension: 70, holdTimer: 0,
+    result: null, resultTimer: 0,
+    swimFish: Array.from({ length: 4 }, () => ({
+      x: Math.random() * W, y: H * 0.35 + Math.random() * H * 0.42,
+      vx: (Math.random() > 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.8),
+      ti: Math.floor(Math.random() * 3),
+    })),
+    bubbles: Array.from({ length: 12 }, () => ({
+      x: Math.random() * W, y: H * 0.3 + Math.random() * H * 0.65,
+      vy: -(0.3 + Math.random() * 0.5), r: 2 + Math.random() * 3, a: 0.2 + Math.random() * 0.35,
+    })),
+  };
+}
+
+function closeFishing() { fishingOpen = false; fishing = null; }
+
+function handleFishingSpace() {
+  if (!fishing) return;
+  if (fishing.phase === 'cast') {
+    fishing.phase = 'wait'; fishing.lineLen = 0;
+    fishing.waitTimer = 120 + Math.floor(Math.random() * 180);
+  } else if (fishing.phase === 'pull') {
+    fishing.tension = Math.min(100, fishing.tension + fishing.fish.boost);
+  }
+}
+
+function updateFishing() {
+  if (!fishing) return;
+  const f = fishing, W = canvas.width, H = canvas.height;
+  for (const sf of f.swimFish) {
+    sf.x += sf.vx;
+    if (sf.x > W + 32) sf.x = -32;
+    if (sf.x < -32)    sf.x = W + 32;
+  }
+  for (const b of f.bubbles) {
+    b.y += b.vy;
+    if (b.y < H * 0.22) { b.y = H * 0.95; b.x = Math.random() * W; }
+  }
+  if (f.phase === 'wait') {
+    if (f.lineLen < f.lineLenTarget) f.lineLen = Math.min(f.lineLenTarget, f.lineLen + 6);
+    if (--f.waitTimer <= 0) {
+      const r = Math.random();
+      f.fish = FISH_TYPES.find(ft => r < ft.prob) || FISH_TYPES[2];
+      f.phase = 'bite'; f.biteAnim = 65;
+    }
+  } else if (f.phase === 'bite') {
+    if (f.lineLen < f.lineLenTarget) f.lineLen = Math.min(f.lineLenTarget, f.lineLen + 6);
+    if (--f.biteAnim <= 0) { f.phase = 'pull'; f.tension = 70; f.holdTimer = 0; }
+  } else if (f.phase === 'pull') {
+    f.tension -= f.fish.decay / 60;
+    if (f.tension <= 0) { f.tension = 0; f.phase = 'result'; f.result = 'fail'; f.resultTimer = 180; }
+    if (f.tension >= 60) {
+      f.holdTimer += 1 / 60;
+      if (f.holdTimer >= f.fish.hold) {
+        f.phase = 'result'; f.result = 'success'; f.resultTimer = 0;
+        inventory[f.fish.key] = (inventory[f.fish.key] || 0) + 1;
+        saveInventory();
+        lootMessage = { text: (settings.language !== 'en' ? f.fish.nameZh : f.fish.nameEn) + ' x1', timer: 200 };
+      }
+    }
+  } // result phase: only closed by key press, never auto-closed
+}
+
+function drawFishingUI() {
+  if (!fishing) return;
+  const f = fishing, W = canvas.width, H = canvas.height;
+  const waterY = H * 0.22, zh = settings.language !== 'en';
+  const rodTipX = W * 0.5, rodTipY = waterY - 65;
+
+  // Background: black + deep water
+  ctx.fillStyle = 'rgba(0,0,0,0.92)'; ctx.fillRect(0, 0, W, H);
+  const wg = ctx.createLinearGradient(0, waterY, 0, H);
+  wg.addColorStop(0, '#0d3a6e'); wg.addColorStop(1, '#020c24');
+  ctx.fillStyle = wg; ctx.fillRect(0, waterY, W, H - waterY);
+
+  // Water surface
+  ctx.save();
+  ctx.strokeStyle = 'rgba(80,180,255,0.5)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, waterY); ctx.lineTo(W, waterY); ctx.stroke();
+  ctx.restore();
+
+  // Bubbles
+  ctx.save();
+  for (const b of f.bubbles) {
+    if (b.y < waterY) continue;
+    ctx.globalAlpha = b.a; ctx.strokeStyle = 'rgba(150,220,255,0.8)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
+
+  // Decorative fish — sprites face LEFT by default; flip when vx > 0 (moving right)
+  ctx.save(); ctx.globalAlpha = 0.4;
+  for (const sf of f.swimFish) {
+    if (sf.y < waterY + 6) continue;
+    ctx.save();
+    if (sf.vx > 0) { ctx.translate(sf.x * 2, 0); ctx.scale(-1, 1); } // face right when going right
+    drawFishSprite(ctx, sf.ti, sf.x, sf.y, 10);
+    ctx.restore();
+  }
+  ctx.restore();
+
+  // Fishing rod
+  ctx.save();
+  ctx.strokeStyle = '#7a5030'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(W * 0.14, H * 0.06); ctx.lineTo(rodTipX, rodTipY); ctx.stroke();
+  ctx.restore();
+
+  // Phase-specific drawing
+  if (f.phase === 'cast') {
+    const angle = Math.sin(tick * 0.052) * Math.PI / 4, lineLen = 54;
+    const hookX = rodTipX + Math.sin(angle) * lineLen, hookY = rodTipY + Math.cos(angle) * lineLen;
+    ctx.strokeStyle = '#c8d0dc'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(rodTipX, rodTipY); ctx.lineTo(hookX, hookY); ctx.stroke();
+    drawHookShape(ctx, hookX, hookY, 8);
+    ctx.fillStyle = '#ffd84d'; ctx.font = '700 16px ' + UI_FONT; ctx.textAlign = 'center';
+    ctx.fillText(zh ? '按 [空格] 抛竿' : 'Press [Space] to cast', W / 2, H - 48);
+
+  } else if (f.phase === 'wait' || f.phase === 'bite') {
+    const hookY = waterY + f.lineLen;
+    ctx.strokeStyle = '#c8d0dc'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(rodTipX, rodTipY); ctx.lineTo(rodTipX, waterY); ctx.stroke();
+    ctx.save(); ctx.setLineDash([4, 4]); ctx.globalAlpha = 0.65;
+    ctx.beginPath(); ctx.moveTo(rodTipX, waterY); ctx.lineTo(rodTipX, hookY); ctx.stroke();
+    ctx.restore();
+    drawHookShape(ctx, rodTipX, hookY, 8);
+    if (f.phase === 'bite' && f.fish) {
+      const prog = 1 - f.biteAnim / 65;
+      const fishX = rodTipX + (1 - prog) * W * 0.22;
+      ctx.save(); ctx.globalAlpha = 0.9; drawFishSprite(ctx, FISH_TYPES.indexOf(f.fish), fishX, hookY, 15); ctx.restore();
+      ctx.fillStyle = '#ffff40'; ctx.font = 'bold 24px ' + UI_FONT; ctx.textAlign = 'center';
+      ctx.fillText('!', fishX, hookY - 26);
+    } else {
+      ctx.fillStyle = 'rgba(200,200,200,0.5)'; ctx.font = '14px ' + UI_FONT; ctx.textAlign = 'center';
+      ctx.fillText(zh ? '等待咬钩...' : 'Waiting for bite...', W / 2, H - 48);
+    }
+
+  } else if (f.phase === 'pull') {
+    const barW = Math.min(370, W * 0.62), barH = 28, barX = (W - barW) / 2, barY = 38;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; roundRectPath(ctx, barX - 8, barY - 8, barW + 16, barH + 16, 8); ctx.fill();
+    ctx.fillStyle = '#2050b8'; ctx.fillRect(barX, barY, barW * 0.6, barH);
+    ctx.fillStyle = '#18883a'; ctx.fillRect(barX + barW * 0.6, barY, barW * 0.4, barH);
+    const ptrX = barX + (f.tension / 100) * barW;
+    ctx.fillStyle = '#fff'; ctx.fillRect(ptrX - 3, barY - 5, 6, barH + 10);
+    ctx.fillStyle = '#ffd84d'; ctx.font = '600 12px ' + UI_FONT; ctx.textAlign = 'center';
+    ctx.fillText(zh ? '拉力' : 'Tension', W / 2, barY - 12);
+    if (f.tension >= 60) {
+      ctx.fillStyle = '#50ff80';
+      ctx.fillText(`${f.holdTimer.toFixed(1)}s / ${f.fish.hold}s`, W / 2, barY + barH + 16);
+    }
+    const shakeX = Math.sin(tick * 0.4) * 6;
+    ctx.save(); ctx.globalAlpha = 0.95; drawFishSprite(ctx, FISH_TYPES.indexOf(f.fish), W / 2 + shakeX, H * 0.54, 28); ctx.restore();
+    ctx.strokeStyle = 'rgba(200,210,220,0.6)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(rodTipX, rodTipY); ctx.lineTo(W / 2 + shakeX, H * 0.54 - 24); ctx.stroke();
+    ctx.fillStyle = '#ffd84d'; ctx.font = '700 16px ' + UI_FONT; ctx.textAlign = 'center';
+    ctx.fillText(zh ? '按 [空格] 拉鱼！' : 'Press [Space] to reel in!', W / 2, H - 48);
+
+  } else if (f.phase === 'result') {
+    ctx.textAlign = 'center';
+    if (f.result === 'success') {
+      ctx.fillStyle = '#ffd84d'; ctx.font = 'bold 28px ' + UI_FONT;
+      ctx.fillText(zh ? '钓鱼成功！' : 'Fish Caught!', W / 2, H * 0.24);
+      ctx.save(); ctx.globalAlpha = 0.95; drawFishSprite(ctx, FISH_TYPES.indexOf(f.fish), W / 2, H * 0.46, 42); ctx.restore();
+      ctx.fillStyle = '#fff'; ctx.font = '600 20px ' + UI_FONT;
+      ctx.fillText(zh ? f.fish.nameZh : f.fish.nameEn, W / 2, H * 0.63);
+    } else {
+      ctx.fillStyle = '#ff6060'; ctx.font = 'bold 28px ' + UI_FONT;
+      ctx.fillText(zh ? '鱼跑了！' : 'Fish Got Away!', W / 2, H * 0.44);
+    }
+    ctx.fillStyle = '#888'; ctx.font = '13px ' + UI_FONT;
+    ctx.fillText(zh ? '点击右上角退出按钮继续' : 'Click the Exit button to continue', W / 2, H * 0.79);
+  }
+
+  // Exit button (top-right, mouse-clickable)
+  const btnW = 80, btnH = 28, btnX = W - btnW - 12, btnY = 64;
+  roundRectPath(ctx, btnX, btnY, btnW, btnH, 8);
+  ctx.fillStyle = 'rgba(160,40,40,0.92)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(255,120,120,0.5)'; ctx.lineWidth = 1.2; ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.font = '600 13px ' + UI_FONT;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(zh ? '退出钓鱼' : 'Exit Fishing', btnX + btnW / 2, btnY + btnH / 2);
+  fishingExitRect = { x: btnX, y: btnY, w: btnW, h: btnH };
+}
+
+function drawHookShape(g, x, y, s) {
+  g.save();
+  g.strokeStyle = '#c0ccd8'; g.lineWidth = Math.max(1.5, s * 0.18);
+  g.lineCap = 'round';
+  g.beginPath();
+  g.moveTo(x, y - s * 0.9);
+  g.lineTo(x, y + s * 0.45);
+  g.arc(x + s * 0.5, y + s * 0.45, s * 0.5, Math.PI, 0);
+  g.lineTo(x + s, y + s * 0.2);
+  g.stroke();
+  g.restore();
+}
+
+function drawFishSprite(g, typeIdx, x, y, s) {
+  if (typeIdx === 0) _drawGrassCarp(g, x, y, s);
+  else if (typeIdx === 1) _drawRedCarp(g, x, y, s);
+  else _drawGoldfish(g, x, y, s);
+}
+
+// Sprites face LEFT: head/eye on LEFT, tail fin on RIGHT.
+// When fish moves right (vx>0) the caller flips so it faces right.
+function _drawGrassCarp(g, x, y, s) {
+  g.fillStyle = '#4e601e';
+  g.beginPath(); g.ellipse(x, y, s * 1.6, s * 0.55, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#728830';
+  g.beginPath(); g.ellipse(x - s * 0.28, y - s * 0.08, s * 0.95, s * 0.36, 0, 0, Math.PI * 2); g.fill();
+  // Tail fin on RIGHT
+  g.fillStyle = '#3e501a';
+  g.beginPath(); g.moveTo(x + s * 1.38, y); g.lineTo(x + s * 2.08, y - s * 0.52); g.lineTo(x + s * 2.08, y + s * 0.52); g.closePath(); g.fill();
+  // Dorsal fin (flows toward right/tail)
+  g.beginPath(); g.moveTo(x, y - s * 0.52); g.lineTo(x + s * 0.35, y - s * 0.92); g.lineTo(x + s * 0.55, y - s * 0.52); g.closePath(); g.fill();
+  // Eye on LEFT (head)
+  g.fillStyle = '#100e04'; g.beginPath(); g.arc(x - s * 1.22, y - s * 0.07, s * 0.14, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#fff';    g.beginPath(); g.arc(x - s * 1.20, y - s * 0.10, s * 0.055, 0, Math.PI * 2); g.fill();
+}
+
+function _drawRedCarp(g, x, y, s) {
+  g.fillStyle = '#b82e18';
+  g.beginPath(); g.ellipse(x, y, s * 1.3, s * 0.72, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#d84028';
+  g.beginPath(); g.ellipse(x - s * 0.18, y - s * 0.1, s * 0.85, s * 0.48, 0, 0, Math.PI * 2); g.fill();
+  // Scale arcs on right half (toward tail)
+  g.save(); g.strokeStyle = '#f06040'; g.lineWidth = s * 0.1;
+  for (let i = 0; i < 3; i++) { g.beginPath(); g.arc(x + s * 0.22 + i * s * 0.38, y + s * 0.08, s * 0.38, 0.28, Math.PI - 0.28); g.stroke(); }
+  g.restore();
+  // Tail on RIGHT
+  g.fillStyle = '#b82e18';
+  g.beginPath(); g.moveTo(x + s * 1.1, y); g.lineTo(x + s * 1.92, y - s * 0.58); g.lineTo(x + s * 1.92, y + s * 0.58); g.closePath(); g.fill();
+  // Eye on LEFT
+  g.fillStyle = '#180408'; g.beginPath(); g.arc(x - s * 0.96, y - s * 0.12, s * 0.15, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#fff';    g.beginPath(); g.arc(x - s * 0.94, y - s * 0.14, s * 0.058, 0, Math.PI * 2); g.fill();
+}
+
+function _drawGoldfish(g, x, y, s) {
+  // Body shifted left (head on left)
+  g.fillStyle = '#c07808';
+  g.beginPath(); g.ellipse(x - s * 0.18, y, s * 1.05, s * 0.62, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#e09828';
+  g.beginPath(); g.ellipse(x - s * 0.32, y - s * 0.09, s * 0.65, s * 0.4, 0, 0, Math.PI * 2); g.fill();
+  // Fan tail on RIGHT
+  g.fillStyle = '#d08818'; g.strokeStyle = '#f0a830'; g.lineWidth = s * 0.09;
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3 - 0.33) * Math.PI;
+    g.beginPath();
+    g.moveTo(x + s * 0.78, y);
+    g.lineTo(x + s * 1.9 + Math.cos(a) * s * 1.05, y + Math.sin(a) * s * 0.92);
+    g.lineTo(x + s * 1.9 + Math.cos(a + 0.58) * s * 1.05, y + Math.sin(a + 0.58) * s * 0.92);
+    g.closePath(); g.fill();
+    g.beginPath(); g.moveTo(x + s * 0.78, y);
+    g.lineTo(x + s * 1.9 + Math.cos(a + 0.29) * s * 1.08, y + Math.sin(a + 0.29) * s * 0.95); g.stroke();
+  }
+  // Eye on LEFT
+  g.fillStyle = '#160800'; g.beginPath(); g.arc(x - s * 0.98, y - s * 0.06, s * 0.16, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#fff';    g.beginPath(); g.arc(x - s * 0.96, y - s * 0.09, s * 0.06, 0, Math.PI * 2); g.fill();
+}
+
+function drawFishingRipple(wx, wy) {
+  ctx.save();
+  const period = 90;
+  for (let i = 0; i < 3; i++) {
+    const p = ((tick + i * 30) % period) / period;
+    const r = p * TILE * 1.15;
+    const alpha = (1 - p) * 0.5;
+    if (alpha <= 0) continue;
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = 'rgba(100,190,255,0.9)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(wx, wy, r, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawFishingHints() {
+  if (settingsOpen || shopOpen || cookOpen || bagOpen || achOpen || fishingOpen) return;
+  const zh = settings.language !== 'en';
+  ctx.save();
+  ctx.font = '600 11px ' + UI_FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const spot of fishingSpots) {
+    if (Math.max(Math.abs(spot.col - player.col), Math.abs(spot.row - player.row)) > 2) continue;
+    const sx = Math.round(spot.col * TILE + TILE / 2 - camX);
+    const sy = Math.round(spot.row * TILE - camY);
+    const label = t('pressGFish');
+    const tw = ctx.measureText(label).width + 14, th = 20;
+    roundRectPath(ctx, sx - tw / 2, sy - th, tw, th, 6);
+    ctx.fillStyle = 'rgba(18,18,20,0.92)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(80,180,255,0.7)'; ctx.lineWidth = 1.2; ctx.stroke();
+    ctx.fillStyle = '#ffd84d';
+    ctx.fillText(label, sx, sy - th / 2 + 1);
+  }
+  ctx.restore();
 }
 
 // ── Bridge & rainbow drawing ──────────────────────────────────────────────────
@@ -2272,6 +2640,9 @@ function updatePonds() {
 function update() {
   tick++;
   updatePonds();
+
+  // Fishing overlay — update its own state then skip normal player logic
+  if (fishingOpen) { updateFishing(); updateCamera(); return; }
 
   // Refresh reachable interactions and keep the selection cursor in range
   interactions = buildInteractions();
@@ -2456,6 +2827,11 @@ function draw() {
   // Berry bushes — single viewport blit from offscreen canvas (no per-bush draw calls)
   ctx.drawImage(berryCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
 
+  // Fishing spot ripples (on water surface, world space)
+  for (const spot of fishingSpots) {
+    drawFishingRipple(spot.waterCol * TILE + TILE / 2, spot.waterRow * TILE + TILE / 2);
+  }
+
   // Bridges (under player)
   for (const p of ponds) if (p.grow > 0) drawBridge(p);
 
@@ -2636,6 +3012,8 @@ function draw() {
   drawHUD();
   drawInteractionBar();
   drawBerryHints();
+  drawFishingHints();
+  if (fishingOpen) drawFishingUI();
 }
 
 // ── Interaction selection bar (screen space, above the player) ────────────────
@@ -3244,6 +3622,12 @@ function buildBagSection(gridEl, keys) {
       `<span class="bc-icon">${meta.icon}</span>` +
       `<span class="bc-count">${n}</span>` +
       `<span class="bc-name">${t(key) || key}</span>`;
+    // Tag fish chips so the right-click slaughter handler can find them
+    if (BAG_FISH_KEYS.includes(key)) {
+      chip.dataset.fish = key;
+      chip.title = t('slaughterHint');
+      chip.style.cursor = 'context-menu';
+    }
     // Drift bottle: clickable to open and reveal message
     if (key === 'driftBottle') {
       chip.style.cursor = 'pointer';
@@ -3266,13 +3650,26 @@ function openBagUI() {
   bagOpen = true;
   for (const k in keys) keys[k] = false;
   document.getElementById('bagTitle').textContent    = t('bagTitle');
+  document.getElementById('bagFishTitle').textContent= t('bagFish');
   document.getElementById('bagIngTitle').textContent = t('bagIngredients');
   document.getElementById('bagFoodTitle').textContent= t('bagFood');
   document.getElementById('bagMatTitle').textContent = t('bagMaterials');
   bagCloseBtn.textContent = t('close');
+  buildBagSection(document.getElementById('bagFishGrid'), BAG_FISH_KEYS);
   buildBagSection(document.getElementById('bagIngGrid'),  BAG_INGREDIENT_KEYS);
   buildBagSection(document.getElementById('bagFoodGrid'), BAG_FOOD_KEYS);
   buildBagSection(document.getElementById('bagMatGrid'),  BAG_MATERIAL_KEYS);
+  // Right-click fish chips → slaughter
+  document.getElementById('bagFishGrid').querySelectorAll('.bag-chip[data-fish]').forEach(chip => {
+    chip.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      const k = chip.dataset.fish;
+      if (!inventory[k] || inventory[k] <= 0) return;
+      inventory[k]--; inventory.fish_meat = (inventory.fish_meat || 0) + 1;
+      saveInventory(); openBagUI();
+      showNotif(t('slaughterDone'));
+    });
+  });
   bagModal.classList.remove('hidden');
 }
 function closeBagUI() { bagOpen = false; bagModal.classList.add('hidden'); }
@@ -3312,7 +3709,10 @@ function applyCanonical(canon) {
   if (!canon || !Array.isArray(canon.map) || canon.map.length !== ROWS * COLS) return;
   canon.map.forEach((v, i) => { map[Math.floor(i / COLS)][i % COLS] = v; });
   decorations.length = 0;
-  for (const d of (canon.decos || [])) decorations.push(d);
+  for (const d of (canon.decos || [])) {
+    if ((d.type === 'flower' || d.type === 'sunflower') && rng(d.col, d.row, 919) >= 0.6) continue;
+    decorations.push(d);
+  }
   for (const ds of digSpots) {
     if (ds.flower && !decorations.some(d => d.col === ds.col && d.row === ds.row))
       decorations.push({ col: ds.col, row: ds.row, type: ds.flower });
