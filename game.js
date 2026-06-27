@@ -51,6 +51,7 @@ for (const ch of chests) chestMap[`${ch.col},${ch.row}`] = ch;
 const inventory  = {
   // currency & loot
   gold: 0, diamond: 0, redflower: 0, apple: 0, coconut: 0,
+  strawberry: 0, blueberry: 0,
   // raw ingredients (shop)
   cabbage: 0, tomato: 0, egg: 0, rice: 0, flour: 0,
   salt: 0, sugar: 0, pepper: 0, meat: 0,
@@ -236,8 +237,9 @@ const RECIPES = [
 const INVENTORY_META = [
   // currency & loot
   { key: 'gold',      icon: '💰' }, { key: 'diamond',  icon: '💎' },
-  { key: 'redflower', icon: '🌸' }, { key: 'apple',    icon: '🍎' },
-  { key: 'coconut',   icon: '🥥' },
+  { key: 'redflower',  icon: '🌸' }, { key: 'apple',      icon: '🍎' },
+  { key: 'coconut',    icon: '🥥' }, { key: 'strawberry', icon: '🍓' },
+  { key: 'blueberry',  icon: '🫐' },
   // raw ingredients
   { key: 'cabbage', icon: '🥬' }, { key: 'tomato', icon: '🍅' },
   { key: 'egg',     icon: '🥚' }, { key: 'rice',   icon: '🍚' },
@@ -256,6 +258,7 @@ const INVENTORY_META = [
 // ── Backpack categories ───────────────────────────────────────────────────────
 // apple goes in Ingredients even though it is also a cooking ingredient for dishes
 const BAG_INGREDIENT_KEYS = [
+  'strawberry', 'blueberry',
   'redflower', 'apple', 'coconut',
   'cabbage', 'tomato', 'egg', 'rice', 'flour',
   'salt', 'sugar', 'pepper', 'meat',
@@ -381,7 +384,7 @@ function buildMap() {
       if (isDigSpotTile(c, r)) continue;
       if (c === SHOP_COL  && r === SHOP_ROW)  continue;
       if (c === STOVE_COL && r === STOVE_ROW) continue;
-      if (rng(c, r, 31) >= 0.06) continue; // ~6% of grass tiles become a tree
+      if (rng(c, r, 31) >= 0.04) continue; // ~4% of grass tiles become a tree (⅔ of original)
       const tv = rng(c, r, 53);
       const half = rng(c, r, 71) < 0.5; // used to thin round & pine trees by half
       if      (tv < 0.45) { if (half) continue; map[r][c] = T.TREE; } // round (halved)
@@ -407,7 +410,7 @@ function buildMap() {
     for (let c = 0; c < COLS; c++) {
       if (map[r][c] !== T.SAND) continue;
       if (isDigSpotTile(c, r)) continue;
-      if (rng(c, r, 83) < 0.12) {
+      if (rng(c, r, 83) < 0.08) {
         map[r][c] = T.PALM;
         palmOnSand[`${c},${r}`] = true;
       }
@@ -439,8 +442,8 @@ function buildMap() {
       if (c === SHOP_COL  && r === SHOP_ROW)  continue;
       if (c === STOVE_COL && r === STOVE_ROW) continue;
       const v = rng(c, r, 42);
-      if      (v < 0.015) decorations.push({ col: c, row: r, type: 'sunflower' });
-      else if (v < 0.09)  decorations.push({ col: c, row: r, type: 'flower' });
+      if      (v < 0.010) decorations.push({ col: c, row: r, type: 'sunflower' });
+      else if (v < 0.060) decorations.push({ col: c, row: r, type: 'flower' });
     }
   }
 
@@ -533,6 +536,22 @@ for (let r = 0; r < ROWS; r++) {
     if (map[r][c] === T.PALM) makePalmTree(c, r);
   }
 }
+
+// ── Berry bushes ──────────────────────────────────────────────────────────────
+const berryBushes   = [];
+const berryBushMap  = {};
+const BERRY_REGEN_MS = 60000; // 60 s real time (timestamp-based, frame-rate independent)
+let   berryPickAnim = null;   // { timer, maxTimer, particles, color }
+
+// Offscreen canvas — static berry art baked here; only one drawImage per frame in draw()
+const berryCanvas  = document.createElement('canvas');
+berryCanvas.width  = COLS * TILE;
+berryCanvas.height = ROWS * TILE;
+const bctx         = berryCanvas.getContext('2d');
+
+// Fixed particle pool — objects are reset on each pick, never allocated mid-game
+const PARTICLE_POOL = Array.from({ length: 10 }, () =>
+  ({ x: 0, y: 0, vx: 0, vy: 0, life: 0, size: 0 }));
 
 // ── Map editor: persistent layered tile edits (admin mode) ────────────────────
 // Each edited tile is stored as { t: terrainBrush, o?: objectBrush } so an object
@@ -689,6 +708,9 @@ function applyEdits(editObj) {
 const publishedMap = (typeof window !== 'undefined' && window.PUBLISHED_MAP) || {};
 applyEdits(publishedMap);
 applyEdits(mapEdits);
+generateBerryBushes();
+loadBerryState();
+renderBerryCanvas();
 
 // ── Player ────────────────────────────────────────────────────────────────────
 const SPEED = 3;
@@ -779,6 +801,8 @@ const I18N = {
     driftMsgBody: '请在兑换码内输入 Makemerich',
     richCodeOk: '💰 恭喜发财！获得 50,000 金币！', richCodeUsedAlready: '该兑换码已使用过了',
     choppedLumber: '木材 x1', choppedPine: (n) => `木材 x1  松子 x${n}`,
+    strawberry: '草莓', blueberry: '蓝莓',
+    pressPickStrawberry: '按 F 采摘草莓', pressPickBlueberry: '按 F 采摘蓝莓',
   },
   en: {
     settings: 'Settings', gender: 'Gender', male: 'Male', female: 'Female',
@@ -829,6 +853,8 @@ const I18N = {
     driftMsgBody: 'Enter Makemerich in the redeem code box',
     richCodeOk: '💰 You\'re rich! +50,000 Gold!', richCodeUsedAlready: 'This code has already been used',
     choppedLumber: 'Lumber x1', choppedPine: (n) => `Lumber x1  Pine Cone x${n}`,
+    strawberry: 'Strawberry', blueberry: 'Blueberry',
+    pressPickStrawberry: 'Press F to pick Strawberry', pressPickBlueberry: 'Press F to pick Blueberry',
   },
 };
 function t(key, ...args) {
@@ -1140,6 +1166,36 @@ function doPickCoconut(pt) {
   saveInventory();
 }
 
+function doPickBerry(bush) {
+  if (bush.picked) return;
+  bush.picked  = true;
+  bush.regenAt = Date.now() + BERRY_REGEN_MS;
+  const count = 1 + Math.floor(Math.random() * 2);
+  inventory[bush.type] = (inventory[bush.type] || 0) + count;
+  saveInventory();
+  saveBerryState();
+  renderBerryCanvas();
+  // Pooled particle burst
+  const wx = bush.col * TILE + 16, wy = bush.row * TILE + 22;
+  const n = PARTICLE_POOL.length;
+  for (let i = 0; i < n; i++) {
+    const p = PARTICLE_POOL[i];
+    const a = (i / n) * Math.PI * 2 + Math.random() * 0.6;
+    p.x = wx; p.y = wy;
+    p.vx = Math.cos(a) * (1.5 + Math.random() * 2);
+    p.vy = Math.sin(a) * (1.5 + Math.random() * 2) - 1.5;
+    p.life = 1; p.size = 2.5 + Math.random() * 2;
+  }
+  berryPickAnim = { timer: 48, maxTimer: 48,
+    color: bush.type === 'strawberry' ? '#ff4444' : '#5050ee',
+    particles: PARTICLE_POOL };
+  const zh = settings.language !== 'en';
+  const name = zh
+    ? (bush.type === 'strawberry' ? '草莓' : '蓝莓')
+    : (bush.type === 'strawberry' ? 'Strawberry' : 'Blueberry');
+  lootMessage = { text: `${name} x${count}`, timer: 150 };
+}
+
 function chopTree(c, r) {
   if (!TREE_TILE_TYPES.has(map[r][c])) return;
   const k = `${c},${r}`;
@@ -1204,6 +1260,12 @@ function buildInteractions() {
   }
   for (const pt of palmTrees) {
     if (pt.coconuts > 0 && near(pt)) list.push({ icon: '🥥', label: t('pressPickCoconut'), act: () => doPickCoconut(pt) });
+  }
+  for (const b of berryBushes) {
+    if (!b.picked && near(b))
+      list.push({ icon: b.type === 'strawberry' ? '🍓' : '🫐',
+                  label: t(b.type === 'strawberry' ? 'pressPickStrawberry' : 'pressPickBlueberry'),
+                  act: () => doPickBerry(b) });
   }
   if (Math.abs(player.col - SHOP_COL)  <= 1 && Math.abs(player.row - SHOP_ROW)  <= 1)
     list.push({ icon: '🏪', label: t('pressShop'), act: doOpenShop });
@@ -1996,6 +2058,135 @@ function drawStoveFlames() {
   }
 }
 
+// ── Berry bush system ─────────────────────────────────────────────────────────
+function generateBerryBushes() {
+  berryBushes.length = 0;
+  for (const k in berryBushMap) delete berryBushMap[k];
+  const decoSet = new Set(decorations.map(d => `${d.col},${d.row}`));
+  for (let r = 1; r < ROWS - 1; r++) {
+    for (let c = 1; c < COLS - 1; c++) {
+      if (map[r][c] !== T.GRASS) continue;
+      if (chestMap[`${c},${r}`])        continue;
+      if (monumentBlocked[`${c},${r}`]) continue;
+      if (isDigSpotTile(c, r))          continue;
+      if (c === SHOP_COL && r === SHOP_ROW)   continue;
+      if (c === STOVE_COL && r === STOVE_ROW) continue;
+      if (decoSet.has(`${c},${r}`))     continue;
+      const rv = rng(c, r, 157);
+      let type = null;
+      if      (rv < 0.006) type = 'strawberry';
+      else if (rv < 0.012) type = 'blueberry';
+      if (!type) continue;
+      const b = { col: c, row: r, type, picked: false, regenAt: 0 };
+      berryBushes.push(b);
+      berryBushMap[`${c},${r}`] = b;
+    }
+  }
+}
+
+function saveBerryState() {
+  const state = {};
+  for (const b of berryBushes) {
+    if (b.picked && b.regenAt) state[`${b.col},${b.row}`] = b.regenAt;
+  }
+  try { localStorage.setItem('mygame_berryState', JSON.stringify(state)); } catch (_) {}
+}
+
+function loadBerryState() {
+  try {
+    const state = JSON.parse(localStorage.getItem('mygame_berryState') || '{}');
+    const now = Date.now();
+    for (const b of berryBushes) {
+      const exp = state[`${b.col},${b.row}`];
+      if (exp && exp > now) { b.picked = true; b.regenAt = exp; }
+    }
+  } catch (_) {}
+}
+
+function renderBerryCanvas() {
+  bctx.clearRect(0, 0, berryCanvas.width, berryCanvas.height);
+  for (const b of berryBushes) {
+    if (b.type === 'strawberry') drawStrawberryBush(bctx, b.col * TILE, b.row * TILE, b.picked);
+    else                         drawBlueberryBush(bctx, b.col * TILE, b.row * TILE, b.picked);
+  }
+}
+
+// Floating hint drawn in screen space above each reachable berry bush
+function drawBerryHints() {
+  if (settingsOpen || shopOpen || cookOpen || bagOpen || achOpen) return;
+  const zh = settings.language !== 'en';
+  ctx.save();
+  ctx.font = '600 11px ' + UI_FONT;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const b of berryBushes) {
+    if (b.picked || !near(b)) continue;
+    const sx = Math.round(b.col * TILE + TILE / 2 - camX);
+    const sy = Math.round(b.row * TILE - 8 - camY);
+    const label = zh
+      ? (b.type === 'strawberry' ? '[F] 采摘草莓' : '[F] 采摘蓝莓')
+      : (b.type === 'strawberry' ? '[F] Pick Strawberry' : '[F] Pick Blueberry');
+    const tw = ctx.measureText(label).width + 14, th = 20;
+    roundRectPath(ctx, sx - tw / 2, sy - th, tw, th, 6);
+    ctx.fillStyle = 'rgba(18,18,20,0.92)'; ctx.fill();
+    ctx.strokeStyle = b.type === 'strawberry' ? 'rgba(220,60,60,0.7)' : 'rgba(80,80,220,0.7)';
+    ctx.lineWidth = 1.2; ctx.stroke();
+    ctx.fillStyle = '#ffd84d';
+    ctx.fillText(label, sx, sy - th / 2 + 1);
+  }
+  ctx.restore();
+}
+
+function drawStrawberryBush(g, x, y, picked) {
+  if (picked) {
+    g.fillStyle = '#888880';
+    g.beginPath(); g.ellipse(x + 16, y + 23, 6, 3, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#606058';
+    g.fillRect(x + 14, y + 26, 4, 3);
+    return;
+  }
+  // leaves
+  g.fillStyle = '#2a9a22';
+  g.beginPath(); g.ellipse(x + 10, y + 21, 6,   3.5, -0.4, 0, Math.PI * 2); g.fill();
+  g.beginPath(); g.ellipse(x + 22, y + 21, 6,   3.5,  0.4, 0, Math.PI * 2); g.fill();
+  g.beginPath(); g.ellipse(x + 16, y + 19, 7.5, 3.5,    0, 0, Math.PI * 2); g.fill();
+  // berries
+  for (const [bx2, by2] of [[12,24],[20,23],[16,28]]) {
+    g.fillStyle = '#cc1818';
+    g.beginPath(); g.arc(x + bx2, y + by2, 3.5, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#ff5050';
+    g.beginPath(); g.arc(x + bx2 - 1, y + by2 - 1, 1.2, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#1a8818';
+    g.fillRect(x + bx2 - 1, y + by2 - 5, 2, 3);
+  }
+}
+
+function drawBlueberryBush(g, x, y, picked) {
+  if (picked) {
+    g.fillStyle = '#888880';
+    g.beginPath(); g.ellipse(x + 16, y + 23, 6, 3, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#606058';
+    g.fillRect(x + 14, y + 26, 4, 3);
+    return;
+  }
+  // leaves
+  g.fillStyle = '#1a7a28';
+  g.beginPath(); g.ellipse(x + 10, y + 21, 5.5, 3.5, -0.3, 0, Math.PI * 2); g.fill();
+  g.beginPath(); g.ellipse(x + 22, y + 21, 5.5, 3.5,  0.3, 0, Math.PI * 2); g.fill();
+  g.beginPath(); g.ellipse(x + 16, y + 19, 7.5, 3.5,    0, 0, Math.PI * 2); g.fill();
+  // berries
+  for (const [bx2, by2] of [[11,25],[18,23],[15,28],[21,26]]) {
+    g.fillStyle = '#2828c8';
+    g.beginPath(); g.arc(x + bx2, y + by2, 3, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#7070ff';
+    g.beginPath(); g.arc(x + bx2 - 1, y + by2 - 1, 1, 0, Math.PI * 2); g.fill();
+    // tiny crown
+    g.fillStyle = '#1010a0';
+    for (let di = -1; di <= 1; di++) {
+      g.fillRect(x + bx2 + di - 0.5, y + by2 - 4, 1, 2);
+    }
+  }
+}
+
 // ── Bridge & rainbow drawing ──────────────────────────────────────────────────
 const BRIDGE_RATE  = 0.15;
 const RAINBOW_RATE = 0.03;
@@ -2161,6 +2352,26 @@ function update() {
   // Tick shake animation
   if (shakingTree && shakingTree.timer > 0) shakingTree.timer--;
 
+  // Berry regen (timestamp-based — no per-frame counter) + pick animation
+  const _berryNow = Date.now();
+  for (const b of berryBushes) {
+    if (b.picked && b.regenAt && _berryNow >= b.regenAt) {
+      b.picked  = false;
+      b.regenAt = 0;
+      saveBerryState();
+      renderBerryCanvas();
+    }
+  }
+  if (berryPickAnim) {
+    berryPickAnim.timer--;
+    for (const p of berryPickAnim.particles) {
+      p.x += p.vx; p.y += p.vy;
+      p.vy += 0.12;
+      p.life = berryPickAnim.timer / berryPickAnim.maxTimer;
+    }
+    if (berryPickAnim.timer <= 0) berryPickAnim = null;
+  }
+
   // Auto-collect fallen trees when player arrives
   if (!player.moving) {
     for (let i = fallenTrees.length - 1; i >= 0; i--) {
@@ -2241,6 +2452,9 @@ function draw() {
 
   const startC = Math.floor(camX / TILE), endC = Math.ceil((camX + canvas.width)  / TILE);
   const startR = Math.floor(camY / TILE), endR = Math.ceil((camY + canvas.height) / TILE);
+
+  // Berry bushes — single viewport blit from offscreen canvas (no per-bush draw calls)
+  ctx.drawImage(berryCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
 
   // Bridges (under player)
   for (const p of ponds) if (p.grow > 0) drawBridge(p);
@@ -2372,6 +2586,20 @@ function draw() {
     ctx.restore();
   }
 
+  // ── Berry pick particles (world space, on top of trees) ─────────────────
+  if (berryPickAnim) {
+    ctx.save();
+    for (const p of berryPickAnim.particles) {
+      if (p.life <= 0) continue;
+      ctx.globalAlpha = p.life * 0.9;
+      ctx.fillStyle = berryPickAnim.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, Math.max(0.5, p.size * p.life), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   // ── Rainbows ──────────────────────────────────────────────────────────────
   for (const p of ponds) if (p.rainbowAnim > 0) drawRainbow(p);
 
@@ -2407,6 +2635,7 @@ function draw() {
 
   drawHUD();
   drawInteractionBar();
+  drawBerryHints();
 }
 
 // ── Interaction selection bar (screen space, above the player) ────────────────
@@ -3091,6 +3320,9 @@ function applyCanonical(canon) {
   for (const k in palmOnSand) delete palmOnSand[k];
   for (const [ks, v] of Object.entries(canon.palmOnSand || {})) palmOnSand[ks] = v;
   renderStaticMap();
+  generateBerryBushes();
+  loadBerryState();
+  renderBerryCanvas();
 }
 
 function startGame() {
