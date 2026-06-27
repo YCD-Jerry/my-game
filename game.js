@@ -2694,7 +2694,6 @@ exitAdminBtn.addEventListener('click', disableAdmin);
 resetMapBtn.addEventListener('click', () => {
   mapEdits = {};
   saveMapEdits();
-  localStorage.removeItem('mapExplorerCanonical'); // clear full snapshot → procedural map
   location.reload();
 });
 
