@@ -43,7 +43,7 @@ const palmOnSand = {};  // "c,r" → true for palms whose ground should render a
 const chests = [
   { col: 12, row: 20, open: false, type: 'normal' },
   { col: 38, row: 10, open: false, type: 'normal' },
-  { col: 20, row: 38, open: false, type: 'normal' }, // centre of the pond at (20,38) — reach it via the magic bridge
+  { col: 20, row: 37, open: false, type: 'precious' }, // 1 block above pond centre — bridge extended to reach it
 ];
 const chestMap = {};
 for (const ch of chests) chestMap[`${ch.col},${ch.row}`] = ch;
@@ -178,7 +178,7 @@ function showNotif(text) {
   document.getElementById('notifText').textContent = text;
   box.classList.remove('hidden');
   if (_notifTimer) clearTimeout(_notifTimer);
-  _notifTimer = setTimeout(() => box.classList.add('hidden'), 2800);
+  _notifTimer = setTimeout(() => box.classList.add('hidden'), 4500);
 }
 
 // ── Tree chopping ─────────────────────────────────────────────────────────────
@@ -477,7 +477,9 @@ function buildMap() {
   for (const p of ponds) {
     const tiles = [];
     const southRow = p.cy + Math.ceil(p.ry);
-    for (let r = southRow; r >= p.cy; r--) {
+    // Extend 1 extra tile for the pond that has a chest above its centre
+    const northEnd = (p.cx === 20 && p.cy === 38) ? p.cy - 1 : p.cy;
+    for (let r = southRow; r >= northEnd; r--) {
       tiles.push({ col: p.cx, row: r });
     }
     p.bridge      = tiles;
@@ -564,9 +566,20 @@ function saveCanonical() {
   const decos = decorations.map(d => ({ col: d.col, row: d.row, type: d.type }));
   const ps = {};
   for (const k in palmOnSand) ps[k] = true;
-  try {
-    localStorage.setItem('mapExplorerCanonical', JSON.stringify({ map: flat, decos, palmOnSand: ps }));
-  } catch (_) {}
+  const data = { map: flat, decos, palmOnSand: ps };
+
+  // 1) 本地备份
+  try { localStorage.setItem('mapExplorerCanonical', JSON.stringify(data)); } catch (_) {}
+
+  // 2) 同步到 Firebase（所有玩家实时更新）
+  if (window.__firebase) {
+    window.__firebase.saveCanonical(data).then(ok => {
+      if (ok) {
+        const btn = document.getElementById('adminSaveBtn');
+        if (btn) { btn.textContent = '☁️ 已同步'; setTimeout(() => { btn.textContent = '💾 存档'; }, 2000); }
+      }
+    });
+  }
 }
 
 // What terrain brush best describes the current map tile?
@@ -1073,9 +1086,13 @@ function doOpenChest(ch) {
   inventory.redflower += spec.f;
   lootMessage = { text: t('chestLoot', t(spec.name), gold, diamond, spec.f), timer: 220 };
   // Pond-centre chest hides a drift bottle
-  if (ch.col === 20 && ch.row === 38 && inventory.driftBottle === 0) {
+  if (ch.col === 20 && ch.row === 37) {
     inventory.driftBottle = 1;
-    setTimeout(() => showNotif(t('foundDriftBottle')), 2400);
+    saveInventory();
+    // Show drift bottle message in the same golden canvas box after chest loot fades (~3.7 s)
+    setTimeout(() => {
+      lootMessage = { text: t('foundDriftBottle'), timer: 300 };
+    }, 3800);
   }
   saveInventory();
   progressAch('chest_' + ch.type);
@@ -3061,5 +3078,51 @@ function openDriftBottle() {
 driftCloseBtn.addEventListener('click', () => driftModal.classList.add('hidden'));
 driftModal.addEventListener('click', e => { if (e.target === driftModal) driftModal.classList.add('hidden'); });
 
-renderStaticMap();
-loop();
+// ── Firebase 启动加载 ──────────────────────────────────────────────────────────
+// 尝试从 Firebase 加载最新地图；Firebase 未就绪时降级用 localStorage
+function applyCanonical(canon) {
+  if (!canon || !Array.isArray(canon.map) || canon.map.length !== ROWS * COLS) return;
+  canon.map.forEach((v, i) => { map[Math.floor(i / COLS)][i % COLS] = v; });
+  decorations.length = 0;
+  for (const d of (canon.decos || [])) decorations.push(d);
+  for (const ds of digSpots) {
+    if (ds.flower && !decorations.some(d => d.col === ds.col && d.row === ds.row))
+      decorations.push({ col: ds.col, row: ds.row, type: ds.flower });
+  }
+  for (const k in palmOnSand) delete palmOnSand[k];
+  for (const [ks, v] of Object.entries(canon.palmOnSand || {})) palmOnSand[ks] = v;
+  renderStaticMap();
+}
+
+function startGame() {
+  renderStaticMap();
+  loop();
+
+  if (window.__firebase) {
+    // 从 Firebase 加载最新地图
+    window.__firebase.loadCanonical().then(canon => {
+      if (canon) {
+        window.PUBLISHED_CANONICAL = canon;
+        applyCanonical(canon);
+      }
+      // 实时监听：管理员改动后所有玩家自动更新
+      window.__firebase.listen(newCanon => {
+        window.PUBLISHED_CANONICAL = newCanon;
+        applyCanonical(newCanon);
+      });
+    });
+  }
+}
+
+// 等 Firebase 就绪再启动（最多等 2 秒，超时直接启动）
+if (window.__firebase) {
+  startGame();
+} else {
+  let started = false;
+  window.addEventListener('firebaseReady', () => {
+    if (!started) { started = true; startGame(); }
+  });
+  setTimeout(() => {
+    if (!started) { started = true; startGame(); }
+  }, 2000);
+}

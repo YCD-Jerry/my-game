@@ -442,6 +442,63 @@
     }
     #bagCloseBtn:hover { background: rgba(255,255,255,0.2); }
   </style>
+
+  <!-- ── Firebase Integration ─────────────────────────────────────── -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
+    import { getFirestore, doc, setDoc, getDoc, onSnapshot }
+      from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBgU9A-x4kXauDqfu_QLFUunyafPs6mJRo",
+      authDomain: "jerrys1stgame.firebaseapp.com",
+      projectId: "jerrys1stgame",
+      storageBucket: "jerrys1stgame.firebasestorage.app",
+      messagingSenderId: "464980408776",
+      appId: "1:464980408776:web:62f8f6670abaf08cbe28fd",
+      measurementId: "G-5YT054M771"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db  = getFirestore(app);
+    const CANON_DOC = doc(db, "gameData", "canonical");
+
+    window.__firebase = {
+      // 存入 Firebase（管理员发布地图时调用）
+      async saveCanonical(data) {
+        try {
+          await setDoc(CANON_DOC, { payload: JSON.stringify(data), updatedAt: Date.now() });
+          console.log("☁️ Firebase 地图已同步");
+          return true;
+        } catch (e) {
+          console.error("❌ Firebase 存档失败", e);
+          return false;
+        }
+      },
+      // 从 Firebase 读取地图（游戏启动时调用）
+      async loadCanonical() {
+        try {
+          const snap = await getDoc(CANON_DOC);
+          if (snap.exists()) return JSON.parse(snap.data().payload);
+          return null;
+        } catch (e) {
+          console.error("❌ Firebase 读取失败", e);
+          return null;
+        }
+      },
+      // 实时监听：管理员改动后所有玩家自动更新
+      listen(callback) {
+        onSnapshot(CANON_DOC, snap => {
+          if (snap.exists()) {
+            try { callback(JSON.parse(snap.data().payload)); } catch (_) {}
+          }
+        });
+      }
+    };
+
+    // 通知 game.js Firebase 已就绪
+    window.dispatchEvent(new Event("firebaseReady"));
+  </script>
 </head>
 <body>
   <canvas id="game"></canvas>
