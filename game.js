@@ -1456,6 +1456,43 @@ function drawTreeByType(g, x, y, type) {
 function doViewStele() {
   steleOpen = true;
   for (const k in keys) keys[k] = false;
+
+  const zh = settings.language !== 'en';
+  const L  = (c, e) => `<div class="stele-line">${zh ? c : e}</div>`;
+  const G  = () => `<div class="stele-gap"></div>`;
+  const HR = () => `<hr class="stele-hr" />`;
+
+  document.getElementById('steleContent').innerHTML =
+    `<div class="stele-title">In Between</div>` +
+    `<div class="stele-subtitle">${zh ? '此间' : 'In Between'}</div>` +
+    HR() +
+    L('一片64×64的广袤世界',         'A world of 64×64 tiles') +
+    L('钓鱼、烹饪、探索、寻宝',       'Fish, Cook, Explore, Discover') +
+    L('属于你的故事，就从这里开始',   'Your story begins right here') +
+    G() +
+    L('A world of 64×64 tiles',       '一片64×64的广袤世界') +
+    L('Fish, Cook, Explore, Discover', '钓鱼、烹饪、探索、寻宝') +
+    HR() +
+    `<div class="stele-from">─── From the Developer ───</div>` +
+    G() +
+    L('You can switch to English in Settings.', '可以在设置里切换到中文。') +
+    G() +
+    L('湖心有一只宝箱，去试试能不能拿到',
+      "There's a chest at the heart of the lake — see if you can reach it") +
+    L('池边随时可以坐下来钓鱼',
+      'You can always sit by the pond and fish') +
+    L('篝火还燃着，食材就在附近',
+      'The campfire is still burning, and ingredients are nearby') +
+    G() +
+    L('不用着急，也没有非做不可的事',
+      "There's no rush, and nothing you have to do") +
+    L('到处走走，看看会遇见什么',
+      'Just wander around and see what you find') +
+    G() +
+    L('这里还在慢慢生长',   'This place is still slowly growing') +
+    L('但现在，它已经是你的了！', "But right now — it's yours.");
+
+  document.getElementById('steleCloseBtn').textContent = zh ? '关闭' : 'Close';
   document.getElementById('steleModal').classList.remove('hidden');
 }
 function closeSteleModal() {
