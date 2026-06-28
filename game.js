@@ -574,6 +574,7 @@ const FISH_TYPES = [
 const fishingSpots = [];
 let fishingOpen = false;
 let fishing = null; // { phase, hookAngle, lineLen, lineLenTarget, waitTimer, biteAnim, fish, tension, holdTimer, result, resultTimer, swimFish, bubbles }
+let cookingMinigame = null; // { recipe, qty, pointer, dir, speed, phase, zone, resultTimer, particles }
 
 // ── Map editor: persistent layered tile edits (admin mode) ────────────────────
 // Each edited tile is stored as { t: terrainBrush, o?: objectBrush } so an object
@@ -907,6 +908,12 @@ window.addEventListener('keydown', e => {
     return; // eat all other keys while fishing
   }
 
+  // Cooking mini-game intercepts Space
+  if (cookingMinigame) {
+    if (!e.repeat && (e.key === ' ' || e.key === 'Spacebar')) { handleCookingSpace(); e.preventDefault(); }
+    return;
+  }
+
   if (isTyping(e)) return;
   keys[e.key] = true;
 
@@ -973,10 +980,14 @@ canvas.addEventListener('click', e => {
         closeFishing(); return;
       }
     }
-    // Click anywhere else acts like Space (cast / reel) — result screen ignored, use Exit button
-    if (fishing && (fishing.phase === 'cast' || fishing.phase === 'pull')) {
-      handleFishingSpace(); return;
-    }
+    // Click anywhere else = Space (cast / reel / restart after result)
+    if (fishing) { handleFishingSpace(); return; }
+    return;
+  }
+
+  // Cooking mini-game click = same as Space
+  if (cookingMinigame) {
+    if (cookingMinigame.phase === 'aim') handleCookingSpace();
     return;
   }
 
@@ -2284,6 +2295,12 @@ function handleFishingSpace() {
     fishing.waitTimer = 120 + Math.floor(Math.random() * 180);
   } else if (fishing.phase === 'pull') {
     fishing.tension = Math.min(100, fishing.tension + fishing.fish.boost);
+  } else if (fishing.phase === 'result') {
+    if (Date.now() - (fishing.resultAt || 0) < 2000) return; // 2-second cooldown
+    fishing.phase = 'cast';
+    fishing.lineLen = 0; fishing.fish = null;
+    fishing.tension = 70; fishing.holdTimer = 0;
+    fishing.result = null; fishing.resultTimer = 0; fishing.resultAt = 0;
   }
 }
 
@@ -2311,11 +2328,11 @@ function updateFishing() {
     if (--f.biteAnim <= 0) { f.phase = 'pull'; f.tension = 70; f.holdTimer = 0; }
   } else if (f.phase === 'pull') {
     f.tension -= f.fish.decay / 60;
-    if (f.tension <= 0) { f.tension = 0; f.phase = 'result'; f.result = 'fail'; f.resultTimer = 180; }
+    if (f.tension <= 0) { f.tension = 0; f.phase = 'result'; f.result = 'fail'; f.resultTimer = 180; f.resultAt = Date.now(); }
     if (f.tension >= 60) {
       f.holdTimer += 1 / 60;
       if (f.holdTimer >= f.fish.hold) {
-        f.phase = 'result'; f.result = 'success'; f.resultTimer = 0;
+        f.phase = 'result'; f.result = 'success'; f.resultTimer = 0; f.resultAt = Date.now();
         inventory[f.fish.key] = (inventory[f.fish.key] || 0) + 1;
         saveInventory();
         lootMessage = { text: (settings.language !== 'en' ? f.fish.nameZh : f.fish.nameEn) + ' x1', timer: 200 };
@@ -2429,8 +2446,8 @@ function drawFishingUI() {
       ctx.fillStyle = '#ff6060'; ctx.font = 'bold 28px ' + UI_FONT;
       ctx.fillText(zh ? '鱼跑了！' : 'Fish Got Away!', W / 2, H * 0.44);
     }
-    ctx.fillStyle = '#888'; ctx.font = '13px ' + UI_FONT;
-    ctx.fillText(zh ? '点击右上角退出按钮继续' : 'Click the Exit button to continue', W / 2, H * 0.79);
+    ctx.fillStyle = '#ffd84d'; ctx.font = '600 14px ' + UI_FONT;
+    ctx.fillText(zh ? '[空格] 或点击 继续钓鱼' : '[Space] or click to fish again', W / 2, H * 0.79);
   }
 
   // Exit button (top-right, mouse-clickable)
@@ -2555,6 +2572,190 @@ function drawFishingHints() {
   ctx.restore();
 }
 
+// ── Cooking mini-game ─────────────────────────────────────────────────────────
+function startCookingMinigame(recipe, qty) {
+  closeCookUI();
+  cookingMinigame = {
+    recipe, qty,
+    pointer: 0.05, dir: 1,
+    speed: 0.0055 + Math.random() * 0.003, // slight per-dish randomness
+    phase: 'aim',
+    zone: null, resultTimer: 0, particles: [],
+  };
+}
+
+function handleCookingSpace() {
+  if (!cookingMinigame || cookingMinigame.phase !== 'aim') return;
+  const mg = cookingMinigame;
+  mg.zone = mg.pointer < 0.40 ? 'cold' : mg.pointer < 0.75 ? 'perfect' : 'burnt';
+  mg.phase = 'result';
+  mg.resultTimer = 90; // 1.5 s at 60 fps
+
+  // Spawn particles at the pointer position on the bar
+  const W = canvas.width, H = canvas.height;
+  const barW = Math.min(500, W * 0.68), barX = (W - barW) / 2;
+  const barY = H * 0.52, px = barX + mg.pointer * barW;
+  if (mg.zone === 'perfect') {
+    for (let i = 0; i < 22; i++) {
+      const a = Math.random() * Math.PI * 2;
+      mg.particles.push({
+        x: px, y: barY + 18,
+        vx: Math.cos(a) * (1.5 + Math.random() * 3.5),
+        vy: -(2.5 + Math.random() * 4),
+        color: Math.random() > 0.45 ? '#ffd84d' : '#ffaa20',
+        size: 3 + Math.random() * 3, life: 1,
+      });
+    }
+  } else if (mg.zone === 'burnt') {
+    for (let i = 0; i < 18; i++) {
+      const gray = 30 + Math.floor(Math.random() * 40);
+      mg.particles.push({
+        x: px + (Math.random() - 0.5) * 24, y: barY + 10,
+        vx: (Math.random() - 0.5) * 1.8,
+        vy: -(0.8 + Math.random() * 2),
+        color: `rgb(${gray},${gray},${gray})`,
+        size: 5 + Math.random() * 6, life: 1,
+      });
+    }
+  }
+}
+
+function updateCookingMinigame() {
+  const mg = cookingMinigame;
+  if (mg.phase === 'aim') {
+    mg.pointer += mg.dir * mg.speed;
+    if (mg.pointer >= 1) { mg.pointer = 1; mg.dir = -1; }
+    if (mg.pointer <= 0) { mg.pointer = 0; mg.dir =  1; }
+  } else if (mg.phase === 'result') {
+    mg.resultTimer--;
+    for (const p of mg.particles) {
+      if (p.life <= 0) continue;
+      p.x += p.vx; p.y += p.vy;
+      if (mg.zone === 'perfect') { p.vy += 0.14; }        // gravity
+      else                       { p.vy -= 0.04; p.size += 0.12; } // smoke rises & expands
+      p.life -= 0.013;
+    }
+    if (mg.resultTimer <= 0) finishCookingMinigame();
+  }
+}
+
+function finishCookingMinigame() {
+  const mg = cookingMinigame;
+  const qty = mg.zone === 'perfect'
+    ? Math.ceil(mg.qty * 1.5)
+    : mg.zone === 'burnt'
+    ? Math.max(1, Math.floor(mg.qty * 0.5))
+    : mg.qty;
+  Object.entries(mg.recipe.needs).forEach(([k, n]) => { inventory[k] -= n * mg.qty; });
+  inventory[mg.recipe.key] = (inventory[mg.recipe.key] || 0) + qty;
+  saveInventory();
+  progressAch('cook');
+  const zh = settings.language !== 'en';
+  const prefix = mg.zone === 'perfect'
+    ? (zh ? '✨ 完美烹饪！ ' : '✨ Perfect! ')
+    : mg.zone === 'burnt'
+    ? (zh ? '💨 焦糊了... ' : '💨 Burnt... ')
+    : '';
+  showNotif(prefix + t('cookDone', mg.recipe.icon, t(mg.recipe.key)) + (qty > 1 ? ` ×${qty}` : ''));
+  cookingMinigame = null;
+  doOpenCooking(); // reopen recipe list
+}
+
+function drawCookingMinigame() {
+  const mg = cookingMinigame;
+  const W = canvas.width, H = canvas.height;
+  const zh = settings.language !== 'en';
+
+  // Dim backdrop
+  ctx.fillStyle = 'rgba(0,0,0,0.88)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Recipe title
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = 'bold 24px ' + UI_FONT;
+  ctx.fillStyle = '#ffd84d';
+  ctx.fillText(`${mg.recipe.icon}  ${t(mg.recipe.key)}`, W / 2, H * 0.28);
+  ctx.font = '14px ' + UI_FONT; ctx.fillStyle = '#aaa';
+  ctx.fillText(zh ? `×${mg.qty} 份` : `×${mg.qty} serving${mg.qty > 1 ? 's' : ''}`, W / 2, H * 0.28 + 34);
+
+  const barW = Math.min(500, W * 0.68), barH = 40;
+  const barX = (W - barW) / 2, barY = H * 0.52;
+
+  if (mg.phase === 'aim') {
+    // Heat bar background
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    roundRectPath(ctx, barX - 8, barY - 8, barW + 16, barH + 16, 10); ctx.fill();
+
+    // Zone fills
+    ctx.fillStyle = '#2050c0'; ctx.fillRect(barX, barY, barW * 0.40, barH);            // cold
+    ctx.fillStyle = '#18883a'; ctx.fillRect(barX + barW * 0.40, barY, barW * 0.35, barH); // perfect
+    ctx.fillStyle = '#b82020'; ctx.fillRect(barX + barW * 0.75, barY, barW * 0.25, barH); // burnt
+
+    // Zone border lines
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(barX + barW * 0.40, barY); ctx.lineTo(barX + barW * 0.40, barY + barH); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(barX + barW * 0.75, barY); ctx.lineTo(barX + barW * 0.75, barY + barH); ctx.stroke();
+
+    // Zone labels
+    ctx.font = '600 12px ' + UI_FONT; ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.fillText(zh ? '生冷' : 'Raw',     barX + barW * 0.20, barY + barH / 2);
+    ctx.fillText(zh ? '完美' : 'Perfect', barX + barW * 0.575, barY + barH / 2);
+    ctx.fillText(zh ? '焦糊' : 'Burnt',   barX + barW * 0.875, barY + barH / 2);
+
+    // Moving pointer
+    const ptrX = barX + mg.pointer * barW;
+    ctx.fillStyle = '#fff'; ctx.fillRect(ptrX - 4, barY - 10, 8, barH + 20);
+    ctx.fillStyle = '#111'; ctx.fillRect(ptrX - 1, barY - 8, 2, barH + 16);
+
+    // Instruction
+    ctx.font = '700 15px ' + UI_FONT; ctx.fillStyle = '#ffd84d';
+    ctx.fillText(zh ? '按 [空格] 或点击 停止判定！' : 'Press [Space] or click to judge!', W / 2, barY + barH + 40);
+
+  } else if (mg.phase === 'result') {
+    const pct = Math.max(0, mg.resultTimer / 90);
+
+    // Frozen bar (dim)
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = '#2050c0'; ctx.fillRect(barX, barY, barW * 0.40, barH);
+    ctx.fillStyle = '#18883a'; ctx.fillRect(barX + barW * 0.40, barY, barW * 0.35, barH);
+    ctx.fillStyle = '#b82020'; ctx.fillRect(barX + barW * 0.75, barY, barW * 0.25, barH);
+    // Pointer frozen
+    const ptrX = barX + mg.pointer * barW;
+    ctx.fillStyle = '#fff'; ctx.fillRect(ptrX - 4, barY - 10, 8, barH + 20);
+    ctx.globalAlpha = 1;
+
+    // Particles
+    ctx.save();
+    for (const p of mg.particles) {
+      if (p.life <= 0) continue;
+      ctx.globalAlpha = Math.max(0, p.life * 0.9);
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(0.5, p.size * (mg.zone === 'perfect' ? p.life : 1)), 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+
+    // Result headline
+    const headline = mg.zone === 'perfect'
+      ? (zh ? '🎉 完美烹饪！' : '🎉 Perfect!')
+      : mg.zone === 'burnt'
+      ? (zh ? '💨 焦糊了...' : '💨 Burnt...')
+      : (zh ? '✓ 普通烹饪' : '✓ Cooked');
+    const hColor = mg.zone === 'perfect' ? '#ffd84d' : mg.zone === 'burnt' ? '#888' : '#90e090';
+    ctx.font = 'bold 30px ' + UI_FONT; ctx.fillStyle = hColor;
+    ctx.fillText(headline, W / 2, H * 0.36);
+
+    // Output quantity
+    const outQty = mg.zone === 'perfect' ? Math.ceil(mg.qty * 1.5) : mg.zone === 'burnt' ? Math.max(1, Math.floor(mg.qty * 0.5)) : mg.qty;
+    ctx.font = '600 20px ' + UI_FONT; ctx.fillStyle = '#fff';
+    ctx.fillText(`${mg.recipe.icon} ×${outQty}`, W / 2, H * 0.44);
+
+    // Countdown dots
+    const dots = Math.ceil(pct * 3);
+    ctx.font = '13px ' + UI_FONT; ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillText('●'.repeat(dots) + '○'.repeat(3 - dots), W / 2, H * 0.62);
+  }
+}
+
 // ── Bridge & rainbow drawing ──────────────────────────────────────────────────
 const BRIDGE_RATE  = 0.15;
 const RAINBOW_RATE = 0.03;
@@ -2643,6 +2844,7 @@ function update() {
 
   // Fishing overlay — update its own state then skip normal player logic
   if (fishingOpen) { updateFishing(); updateCamera(); return; }
+  if (cookingMinigame) updateCookingMinigame();
 
   // Refresh reachable interactions and keep the selection cursor in range
   interactions = buildInteractions();
@@ -3014,6 +3216,7 @@ function draw() {
   drawBerryHints();
   drawFishingHints();
   if (fishingOpen) drawFishingUI();
+  if (cookingMinigame) drawCookingMinigame();
 }
 
 // ── Interaction selection bar (screen space, above the player) ────────────────
@@ -3513,12 +3716,7 @@ function openCookUI() {
 
     cookBtn.addEventListener('click', () => {
       if (maxCookable(recipe) < qty) { showNotif(t('cookMissing')); return; }
-      Object.entries(recipe.needs).forEach(([k, n]) => { inventory[k] -= n * qty; });
-      inventory[recipe.key] = (inventory[recipe.key] || 0) + qty;
-      saveInventory();
-      showNotif(t('cookDone', recipe.icon, t(recipe.key)) + (qty > 1 ? ` ×${qty}` : ''));
-      progressAch('cook');
-      openCookUI();
+      startCookingMinigame(recipe, qty);
     });
   });
   cookModal.classList.remove('hidden');
