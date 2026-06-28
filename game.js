@@ -63,7 +63,7 @@ const inventory  = {
   redBraisedPork: 0, friedPork: 0, mincedMeatRice: 0,
   tomatoSoup: 0, sweetPancake: 0,
   // fish (from fishing) + fish/berry dishes
-  grass_carp: 0, red_carp: 0, goldfish: 0, fish_meat: 0,
+  grass_carp: 0, bass: 0, red_carp: 0, goldfish: 0, huso: 0, fish_meat: 0,
   grilledFish: 0, strawberryJelly: 0, blueberryPie: 0, fishBlueSoup: 0,
   // materials (from chopping trees)
   lumber: 0, pinecone: 0,
@@ -149,6 +149,26 @@ const ACHIEVEMENTS = [
   { id: 'fc_gf_10', icon: '🐡', section: 'fisherman',
     nameZh: '金鱼·Ⅲ',   nameEn: 'Goldfish III',
     descZh: '钓到10条金鱼',  descEn: 'Catch 10 Goldfish',    target: 10, track: 'fish_goldfish',   reward: { diamond: 20 } },
+  // Bass (鲈鱼)
+  { id: 'fc_bs_3',  icon: '🐟', section: 'fisherman',
+    nameZh: '鲈鱼·Ⅰ',   nameEn: 'Bass I',
+    descZh: '钓到3条鲈鱼',   descEn: 'Catch 3 Bass',         target: 3,  track: 'fish_bass',       reward: { diamond: 5  } },
+  { id: 'fc_bs_6',  icon: '🐟', section: 'fisherman',
+    nameZh: '鲈鱼·Ⅱ',   nameEn: 'Bass II',
+    descZh: '钓到6条鲈鱼',   descEn: 'Catch 6 Bass',         target: 6,  track: 'fish_bass',       reward: { diamond: 10 } },
+  { id: 'fc_bs_10', icon: '🐟', section: 'fisherman',
+    nameZh: '鲈鱼·Ⅲ',   nameEn: 'Bass III',
+    descZh: '钓到10条鲈鱼',  descEn: 'Catch 10 Bass',        target: 10, track: 'fish_bass',       reward: { diamond: 20 } },
+  // Huso (鳇鱼)
+  { id: 'fc_hs_3',  icon: '🐟', section: 'fisherman',
+    nameZh: '鳇鱼·Ⅰ',   nameEn: 'Huso I',
+    descZh: '钓到3条鳇鱼',   descEn: 'Catch 3 Huso',         target: 3,  track: 'fish_huso',       reward: { diamond: 5  } },
+  { id: 'fc_hs_6',  icon: '🐟', section: 'fisherman',
+    nameZh: '鳇鱼·Ⅱ',   nameEn: 'Huso II',
+    descZh: '钓到6条鳇鱼',   descEn: 'Catch 6 Huso',         target: 6,  track: 'fish_huso',       reward: { diamond: 10 } },
+  { id: 'fc_hs_10', icon: '🐟', section: 'fisherman',
+    nameZh: '鳇鱼·Ⅲ',   nameEn: 'Huso III',
+    descZh: '钓到10条鳇鱼',  descEn: 'Catch 10 Huso',        target: 10, track: 'fish_huso',       reward: { diamond: 20 } },
 ];
 
 let achProgress = {};  // track → count
@@ -248,8 +268,14 @@ const STOVE_COL = 44, STOVE_ROW = 30;
 // Call protectBuilding() for any new building added in the future.
 const BUILDING_TILES = new Set();
 function protectBuilding(col, row) { BUILDING_TILES.add(`${col},${row}`); }
+// ── Stone stele (前 of Washington Monument) ───────────────────────────────────
+const STELE_COL = Math.floor(COLS / 2) + 3; // 3 tiles east of monument center
+const STELE_ROW = 36;                   // 2 tiles south of monument base (row 34)
+let   steleOpen = false;
+
 protectBuilding(SHOP_COL,  SHOP_ROW);
 protectBuilding(STOVE_COL, STOVE_ROW);
+protectBuilding(STELE_COL, STELE_ROW);
 
 // ── Recipes (19 dishes) ──────────────────────────────────────────────────────
 // cookZones: [coldEnd, normal1End, perfectEnd, normal2End]  (0-1 fractions)
@@ -318,8 +344,9 @@ const INVENTORY_META = [
   // cooked dishes (inherit icon from RECIPES)
   ...RECIPES.map(r => ({ key: r.key, icon: r.icon })),
   // fish
-  { key: 'grass_carp', icon: '🐟' }, { key: 'red_carp', icon: '🐠' },
-  { key: 'goldfish',   icon: '🐡' }, { key: 'fish_meat', icon: '🍣' },
+  { key: 'grass_carp', icon: '🐟' }, { key: 'bass',     icon: '🐟' },
+  { key: 'red_carp',   icon: '🐠' }, { key: 'goldfish', icon: '🐡' },
+  { key: 'huso',       icon: '🐟' }, { key: 'fish_meat', icon: '🍣' },
   // materials
   { key: 'lumber',      icon: '🪵' },
   { key: 'pinecone',    icon: '🌰' },
@@ -335,7 +362,7 @@ const BAG_INGREDIENT_KEYS = [
   'cabbage', 'tomato', 'egg', 'rice', 'flour',
   'salt', 'sugar', 'pepper', 'meat', 'fish_meat',
 ];
-const BAG_FISH_KEYS     = ['grass_carp', 'red_carp', 'goldfish'];
+const BAG_FISH_KEYS     = ['grass_carp', 'bass', 'red_carp', 'goldfish', 'huso'];
 const BAG_FOOD_KEYS     = RECIPES.map(r => r.key);
 const BAG_MATERIAL_KEYS = ['lumber', 'pinecone', 'driftBottle'];
 
@@ -457,6 +484,7 @@ function buildMap() {
       if (isDigSpotTile(c, r)) continue;
       if (c === SHOP_COL  && r === SHOP_ROW)  continue;
       if (c === STOVE_COL && r === STOVE_ROW) continue;
+      if (c === STELE_COL && r === STELE_ROW) continue;
       if (rng(c, r, 31) >= 0.04) continue; // ~4% of grass tiles become a tree (⅔ of original)
       const tv = rng(c, r, 53);
       const half = rng(c, r, 71) < 0.5; // used to thin round & pine trees by half
@@ -514,6 +542,7 @@ function buildMap() {
       if (isDigSpotTile(c, r))          continue;
       if (c === SHOP_COL  && r === SHOP_ROW)  continue;
       if (c === STOVE_COL && r === STOVE_ROW) continue;
+      if (c === STELE_COL && r === STELE_ROW) continue;
       const v = rng(c, r, 42);
       if      (v < 0.006) decorations.push({ col: c, row: r, type: 'sunflower' });
       else if (v < 0.036) decorations.push({ col: c, row: r, type: 'flower' });
@@ -631,23 +660,29 @@ const PARTICLE_POOL = Array.from({ length: 10 }, () =>
 
 // ── Fishing system ────────────────────────────────────────────────────────────
 const FISH_TYPES = [
-  // slideSpeed: auto-left per second   jumpDist: space-right jump   hold: cumulative seconds needed
-  // zoneWidthMin/Max: dynamic width range   zoneWidthChangeSpeed: lerp speed
-  // zoneSpeedMax: max zone center speed (units/s)
-  // zonePauseMin/Max: random pause duration between direction changes (0 = no pause)
-  // zoneJumpEvery: avg seconds between right→left jumps (0 = no jumps)
-  { key: 'grass_carp', nameZh: '草鱼',  nameEn: 'Grass Carp', prob: 0.50,
-    slideSpeed: 0.07, jumpDist: 0.044, hold: 3,
+  // slideSpeed: auto-left/s   jumpDist: space jump   hold: success seconds needed   escapeTime: fail seconds outside zone
+  // zoneWidthMin/Max   zoneWidthChangeSpeed   zoneSpeedMax   zonePauseMin/Max   zoneJumpEvery
+  // Probs are CUMULATIVE. Order: grass_carp 30%, bass 20%, red_carp 25%, goldfish 17%, huso 8%
+  { key: 'grass_carp', nameZh: '草鱼',  nameEn: 'Grass Carp', prob: 0.30,
+    slideSpeed: 0.07, jumpDist: 0.044, hold: 3.0, escapeTime: 5.0,
     zoneWidthMin: 0.15, zoneWidthMax: 0.25, zoneWidthChangeSpeed: 0.15,
     zoneSpeedMax: 0.06, zonePauseMin: 0.5, zonePauseMax: 1.5, zoneJumpEvery: 0 },
-  { key: 'red_carp',   nameZh: '红鲤鱼', nameEn: 'Red Carp',   prob: 0.85,
-    slideSpeed: 0.13, jumpDist: 0.040, hold: 4,
+  { key: 'bass',       nameZh: '鲈鱼',  nameEn: 'Bass',        prob: 0.50,
+    slideSpeed: 0.09, jumpDist: 0.042, hold: 3.5, escapeTime: 2.5,
+    zoneWidthMin: 0.13, zoneWidthMax: 0.20, zoneWidthChangeSpeed: 0.22,
+    zoneSpeedMax: 0.12, zonePauseMin: 0.3, zonePauseMax: 1.0, zoneJumpEvery: 0 },
+  { key: 'red_carp',   nameZh: '红鲤鱼', nameEn: 'Red Carp',   prob: 0.75,
+    slideSpeed: 0.13, jumpDist: 0.040, hold: 4.0, escapeTime: 5.0,
     zoneWidthMin: 0.12, zoneWidthMax: 0.22, zoneWidthChangeSpeed: 0.40,
     zoneSpeedMax: 0.20, zonePauseMin: 0.1, zonePauseMax: 0.6, zoneJumpEvery: 6.5 },
-  { key: 'goldfish',   nameZh: '金鱼',   nameEn: 'Goldfish',   prob: 1.00,
-    slideSpeed: 0.20, jumpDist: 0.035, hold: 6,
+  { key: 'goldfish',   nameZh: '金鱼',   nameEn: 'Goldfish',   prob: 0.92,
+    slideSpeed: 0.20, jumpDist: 0.035, hold: 6.0, escapeTime: 5.0,
     zoneWidthMin: 0.08, zoneWidthMax: 0.18, zoneWidthChangeSpeed: 0.80,
     zoneSpeedMax: 0.45, zonePauseMin: 0,   zonePauseMax: 0.05, zoneJumpEvery: 4.0 },
+  { key: 'huso',       nameZh: '鳇鱼',  nameEn: 'Huso',        prob: 1.00,
+    slideSpeed: 0.22, jumpDist: 0.032, hold: 6.0, escapeTime: 1.5,
+    zoneWidthMin: 0.07, zoneWidthMax: 0.17, zoneWidthChangeSpeed: 0.85,
+    zoneSpeedMax: 0.48, zonePauseMin: 0,   zonePauseMax: 0.03, zoneJumpEvery: 3.5 },
 ];
 const fishingSpots = [];
 let fishingOpen = false;
@@ -813,6 +848,7 @@ generateBerryBushes();
 loadBerryState();
 renderBerryCanvas();
 generateFishingSpots();
+loadOpenedChests();
 
 // ── Player ────────────────────────────────────────────────────────────────────
 const SPEED = 3;
@@ -905,8 +941,9 @@ const I18N = {
     choppedLumber: '木材 x1', choppedPine: (n) => `木材 x1  松子 x${n}`,
     strawberry: '草莓', blueberry: '蓝莓',
     pressPickStrawberry: '按 F 采摘草莓', pressPickBlueberry: '按 F 采摘蓝莓',
+    pressViewStele: '按 F 查看',
     grilledFish: '烤鱼', strawberryJelly: '草莓冻', blueberryPie: '蓝莓派', fishBlueSoup: '鱼肉蓝莓汤',
-    grass_carp: '草鱼', red_carp: '红鲤鱼', goldfish: '金鱼', fish_meat: '鱼肉',
+    grass_carp: '草鱼', bass: '鲈鱼', red_carp: '红鲤鱼', goldfish: '金鱼', huso: '鳇鱼', fish_meat: '鱼肉',
     bagFish: '鱼类', pressGFish: '[G] 钓鱼',
     slaughterHint: '右键宰杀 → 鱼肉', slaughterDone: '鱼肉 x1',
   },
@@ -961,8 +998,9 @@ const I18N = {
     choppedLumber: 'Lumber x1', choppedPine: (n) => `Lumber x1  Pine Cone x${n}`,
     strawberry: 'Strawberry', blueberry: 'Blueberry',
     pressPickStrawberry: 'Press F to pick Strawberry', pressPickBlueberry: 'Press F to pick Blueberry',
+    pressViewStele: 'Press F to read',
     grilledFish: 'Grilled Fish', strawberryJelly: 'Strawberry Jelly', blueberryPie: 'Blueberry Pie', fishBlueSoup: 'Fish Blueberry Soup',
-    grass_carp: 'Grass Carp', red_carp: 'Red Carp', goldfish: 'Goldfish', fish_meat: 'Fish Meat',
+    grass_carp: 'Grass Carp', bass: 'Bass', red_carp: 'Red Carp', goldfish: 'Goldfish', huso: 'Huso', fish_meat: 'Fish Meat',
     bagFish: 'Fish', pressGFish: '[G] Fish',
     slaughterHint: 'Right-click to slaughter → Fish Meat', slaughterDone: 'Fish Meat x1',
   },
@@ -976,7 +1014,7 @@ function t(key, ...args) {
 let settingsOpen = false;
 const keys = {};
 function isTyping(e) {
-  return settingsOpen || shopOpen || cookOpen || bagOpen || achOpen || fishingOpen || (e.target && e.target.tagName === 'INPUT');
+  return settingsOpen || shopOpen || cookOpen || bagOpen || achOpen || fishingOpen || steleOpen || (e.target && e.target.tagName === 'INPUT');
 }
 window.addEventListener('keydown', e => {
   // Fishing overlay captures its own keys before isTyping
@@ -987,6 +1025,9 @@ window.addEventListener('keydown', e => {
     }
     return; // eat all other keys while fishing
   }
+
+  // Stele modal: ESC closes
+  if (steleOpen && e.key === 'Escape') { closeSteleModal(); return; }
 
   // Cooking mini-game intercepts Space
   if (cookingMinigame) {
@@ -1186,6 +1227,7 @@ function isWalkable(r, c) {
   if (monumentBlocked[`${c},${r}`])  return false;
   if (c === SHOP_COL  && r === SHOP_ROW)  return false;
   if (c === STOVE_COL && r === STOVE_ROW) return false;
+  if (c === STELE_COL && r === STELE_ROW) return false;
   const t = map[r][c];
   if (t === T.WATER) {
     const b = bridgeTileIndex[`${c},${r}`];
@@ -1272,10 +1314,43 @@ function doOpenChest(ch) {
   }
   saveInventory();
   progressAch('chest_' + ch.type);
-
+  saveOpenedChests();
 }
 
-function doDig(ds) { ds.dug = true; }
+// ── Chest open-state persistence ──────────────────────────────────────────────
+// Saves which chests the player has already looted, so rewards can't be
+// farmed by refreshing.  Key: mygame_chests_opened
+// Chest *positions* come from the map/admin layer and are unaffected.
+function saveOpenedChests() {
+  const opened = {};
+  for (const ch of chests) {
+    if (ch.open) opened[`${ch.col},${ch.row}`] = 'chest';
+  }
+  for (const ds of digSpots) {
+    if (ds.chestOpen) opened[`dig:${ds.col},${ds.row}`] = 'opened';
+    else if (ds.dug)  opened[`dig:${ds.col},${ds.row}`] = 'dug';
+  }
+  try { localStorage.setItem('mygame_chests_opened', JSON.stringify(opened)); } catch(_) {}
+}
+
+function loadOpenedChests() {
+  try {
+    const opened = JSON.parse(localStorage.getItem('mygame_chests_opened') || '{}');
+    for (const ch of chests) {
+      if (opened[`${ch.col},${ch.row}`]) {
+        ch.open = true;
+        ch.disappearTimer = 0; // already faded — skipped in draw()
+      }
+    }
+    for (const ds of digSpots) {
+      const state = opened[`dig:${ds.col},${ds.row}`];
+      if (state === 'opened') { ds.dug = true; ds.chestOpen = true; ds.disappearTimer = 0; }
+      else if (state === 'dug') { ds.dug = true; }
+    }
+  } catch(_) {}
+}
+
+function doDig(ds) { ds.dug = true; saveOpenedChests(); }
 
 function doOpenDigChest(ds) {
   ds.chestOpen      = true;
@@ -1289,7 +1364,7 @@ function doOpenDigChest(ds) {
   lootMessage = { text: t('chestLoot', t(spec.name), gold, diamond, spec.f), timer: 240 };
   saveInventory();
   progressAch('chest_' + ds.chestType);
-
+  saveOpenedChests();
 }
 
 function doPickApple(at) {
@@ -1378,6 +1453,16 @@ function drawTreeByType(g, x, y, type) {
   else if (type === T.APPLE)  drawAppleTree(g, x, y, 0);
 }
 
+function doViewStele() {
+  steleOpen = true;
+  for (const k in keys) keys[k] = false;
+  document.getElementById('steleModal').classList.remove('hidden');
+}
+function closeSteleModal() {
+  steleOpen = false;
+  document.getElementById('steleModal').classList.add('hidden');
+}
+
 function doOpenShop() {
   shopOpen = true;
   for (const k in keys) keys[k] = false;
@@ -1421,6 +1506,8 @@ function buildInteractions() {
     list.push({ icon: '🏪', label: t('pressShop'), act: doOpenShop });
   if (Math.abs(player.col - STOVE_COL) <= 1 && Math.abs(player.row - STOVE_ROW) <= 1)
     list.push({ icon: '🍳', label: t('pressCook'), act: doOpenCooking });
+  if (Math.hypot(player.col - STELE_COL, player.row - STELE_ROW) <= 2.5)
+    list.push({ icon: '📜', label: t('pressViewStele'), act: doViewStele });
   return list;
 }
 
@@ -2108,6 +2195,7 @@ function renderTreeCanvas() {
   drawMonument(tctx);
   drawShopBuilding(tctx);
   drawStoveBuilding(tctx);
+  drawStele(tctx);
 }
 
 function drawShopBuilding(g) {
@@ -2189,6 +2277,90 @@ function drawStoveBuilding(g) {
   g.fillText('STOVE', x + 16, y + 4);
 }
 
+// ── Stone stele ───────────────────────────────────────────────────────────────
+function drawStele(g) {
+  const x  = STELE_COL * TILE, y = STELE_ROW * TILE;
+  const cx = x + 16; // tile center
+  const sw = 24;     // stele body width
+  const sx = cx - sw / 2;
+  const bodyTop = y - 18;  // stele body extends 18px above tile
+  const bodyBot = y + 24;  // and 24px down into tile
+  const arcR    = sw / 2;
+
+  // Drop shadow
+  g.fillStyle = 'rgba(0,0,0,0.22)';
+  g.fillRect(sx + 3, bodyTop + 3, sw, bodyBot - bodyTop + 9);
+
+  // Stone pedestal / base
+  g.fillStyle = '#3a3a46';
+  g.fillRect(sx - 4, bodyBot - 2, sw + 8, 10);
+  g.fillStyle = '#30303c';
+  g.fillRect(sx - 2, bodyBot + 1, sw + 4, 7);
+
+  // Main stone body (arch-top rectangle)
+  g.fillStyle = '#4e4e5e';
+  g.beginPath();
+  g.moveTo(sx, bodyTop + arcR);
+  g.arc(cx, bodyTop + arcR, arcR, Math.PI, 0);   // rounded top
+  g.lineTo(sx + sw, bodyBot - 2);
+  g.lineTo(sx, bodyBot - 2);
+  g.closePath();
+  g.fill();
+
+  // Left-edge shadow (stone depth)
+  g.fillStyle = 'rgba(0,0,0,0.25)';
+  g.fillRect(sx, bodyTop + arcR, 2, bodyBot - bodyTop - arcR - 2);
+  // Right-edge highlight
+  g.fillStyle = 'rgba(255,255,255,0.06)';
+  g.fillRect(sx + sw - 2, bodyTop + arcR, 2, bodyBot - bodyTop - arcR - 2);
+
+  // Outer border
+  g.strokeStyle = '#252532';
+  g.lineWidth = 1.2;
+  g.beginPath();
+  g.moveTo(sx, bodyTop + arcR);
+  g.arc(cx, bodyTop + arcR, arcR, Math.PI, 0);
+  g.lineTo(sx + sw, bodyBot - 2);
+  g.lineTo(sx, bodyBot - 2);
+  g.closePath();
+  g.stroke();
+
+  // Inner inset border (carved look)
+  g.strokeStyle = 'rgba(255,255,255,0.08)';
+  g.lineWidth = 0.8;
+  g.beginPath();
+  g.moveTo(sx + 3, bodyTop + arcR);
+  g.arc(cx, bodyTop + arcR, arcR - 3, Math.PI, 0);
+  g.lineTo(sx + sw - 3, bodyBot - 5);
+  g.lineTo(sx + 3, bodyBot - 5);
+  g.closePath();
+  g.stroke();
+
+  // Text content (decorative only — full text is in the modal)
+  g.save();
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  // Title "In Between" — gold
+  g.font = 'bold 5.5px sans-serif';
+  g.fillStyle = '#ffd84d';
+  g.shadowColor = 'rgba(0,0,0,0.8)'; g.shadowBlur = 2;
+  g.fillText('In Between', cx, bodyTop + arcR + 8);
+  // Subtitle "此间" — cream
+  g.font = '4.5px sans-serif';
+  g.fillStyle = '#c8c0a8';
+  g.fillText('此间', cx, bodyTop + arcR + 16);
+  g.shadowBlur = 0;
+  // Small gold divider
+  g.strokeStyle = 'rgba(255,216,77,0.35)';
+  g.lineWidth = 0.6;
+  g.beginPath(); g.moveTo(cx - 7, bodyTop + arcR + 20); g.lineTo(cx + 7, bodyTop + arcR + 20); g.stroke();
+  // Three small dots at bottom
+  g.fillStyle = 'rgba(255,216,77,0.28)';
+  for (const dx of [-5, 0, 5]) {
+    g.beginPath(); g.arc(cx + dx, bodyBot - 10, 0.9, 0, Math.PI * 2); g.fill();
+  }
+  g.restore();
+}
+
 // Draw animated stove flames — called every frame in draw() (world-space, before tree overlay)
 function drawStoveFlames() {
   const x = STOVE_COL * TILE, y = STOVE_ROW * TILE;
@@ -2221,6 +2393,7 @@ function generateBerryBushes() {
       if (isDigSpotTile(c, r))          continue;
       if (c === SHOP_COL && r === SHOP_ROW)   continue;
       if (c === STOVE_COL && r === STOVE_ROW) continue;
+      if (c === STELE_COL && r === STELE_ROW) continue;
       if (decoSet.has(`${c},${r}`))     continue;
       const rv = rng(c, r, 157);
       let type = null;
@@ -2357,7 +2530,7 @@ function openFishing() {
     swimFish: Array.from({ length: 4 }, () => ({
       x: Math.random() * W, y: H * 0.35 + Math.random() * H * 0.42,
       vx: (Math.random() > 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.8),
-      ti: Math.floor(Math.random() * 3),
+      ti: Math.floor(Math.random() * 5),
     })),
     bubbles: Array.from({ length: 12 }, () => ({
       x: Math.random() * W, y: H * 0.3 + Math.random() * H * 0.65,
@@ -2531,7 +2704,7 @@ function updateFishing() {
     } else {
       // Outside zone: accumulate escape timer (5s = fail)
       f.escapeTimer += dt;
-      if (f.escapeTimer >= 5) {
+      if (f.escapeTimer >= (f.fish.escapeTime ?? 5)) {
         f.phase = 'result'; f.result = 'fail'; f.resultAt = Date.now();
       }
     }
@@ -2665,12 +2838,13 @@ function drawFishingUI() {
       const escBarX = (W - escBarW) / 2, escBarY = barY + barH + 28;
       ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(escBarX - 3, escBarY - 3, escBarW + 6, escBarH + 6);
       ctx.fillStyle = '#2a1010'; ctx.fillRect(escBarX, escBarY, escBarW, escBarH);
-      const urgency = escT / 5; // 0→1 over 5 seconds
+      const escMax = f.fish.escapeTime ?? 5;
+      const urgency = escT / escMax;
       ctx.fillStyle = urgency > 0.6 ? '#ff3030' : '#d06020';
       ctx.fillRect(escBarX, escBarY, escBarW * urgency, escBarH);
       ctx.fillStyle = urgency > 0.6 ? '#ff8080' : '#aaa'; ctx.font = '10px ' + UI_FONT;
       ctx.fillText(
-        zh ? `⚠ 脱钩 ${(5 - escT).toFixed(1)}s` : `⚠ Escaping ${(5 - escT).toFixed(1)}s`,
+        zh ? `⚠ 脱钩 ${(escMax - escT).toFixed(1)}s` : `⚠ Escaping ${(escMax - escT).toFixed(1)}s`,
         W / 2, escBarY + escBarH + 11
       );
     }
@@ -2732,9 +2906,11 @@ function drawHookShape(g, x, y, s) {
 }
 
 function drawFishSprite(g, typeIdx, x, y, s) {
-  if (typeIdx === 0) _drawGrassCarp(g, x, y, s);
-  else if (typeIdx === 1) _drawRedCarp(g, x, y, s);
-  else _drawGoldfish(g, x, y, s);
+  if      (typeIdx === 0) _drawGrassCarp(g, x, y, s);
+  else if (typeIdx === 1) _drawBass(g, x, y, s);
+  else if (typeIdx === 2) _drawRedCarp(g, x, y, s);
+  else if (typeIdx === 3) _drawGoldfish(g, x, y, s);
+  else                    _drawHuso(g, x, y, s);
 }
 
 // Sprites face LEFT: head/eye on LEFT, tail fin on RIGHT.
@@ -2792,6 +2968,77 @@ function _drawGoldfish(g, x, y, s) {
   // Eye on LEFT
   g.fillStyle = '#160800'; g.beginPath(); g.arc(x - s * 0.98, y - s * 0.06, s * 0.16, 0, Math.PI * 2); g.fill();
   g.fillStyle = '#fff';    g.beginPath(); g.arc(x - s * 0.96, y - s * 0.09, s * 0.06, 0, Math.PI * 2); g.fill();
+}
+
+// Bass (鲈鱼): silver-gray, streamlined, 3 dark stripes on back, slightly forked tail
+function _drawBass(g, x, y, s) {
+  // Silver-gray streamlined body
+  g.fillStyle = '#909098';
+  g.beginPath(); g.ellipse(x, y, s * 1.62, s * 0.50, 0, 0, Math.PI * 2); g.fill();
+  // Lighter belly
+  g.fillStyle = '#c4c8d0';
+  g.beginPath(); g.ellipse(x - s * 0.15, y + s * 0.12, s * 1.1, s * 0.28, 0, 0, Math.PI * 2); g.fill();
+  // Slightly forked tail on RIGHT
+  g.fillStyle = '#787888';
+  g.beginPath();
+  g.moveTo(x + s * 1.38, y);
+  g.lineTo(x + s * 2.05, y - s * 0.50);
+  g.lineTo(x + s * 1.80, y - s * 0.14);
+  g.lineTo(x + s * 1.80, y + s * 0.14);
+  g.lineTo(x + s * 2.05, y + s * 0.50);
+  g.closePath(); g.fill();
+  // Dorsal fin
+  g.fillStyle = '#686878';
+  g.beginPath(); g.moveTo(x - s * 0.15, y - s * 0.48); g.lineTo(x + s * 0.52, y - s * 0.92); g.lineTo(x + s * 0.72, y - s * 0.48); g.closePath(); g.fill();
+  // 3 dark stripes across back (arcs)
+  g.save(); g.strokeStyle = 'rgba(18,18,30,0.52)'; g.lineWidth = s * 0.09; g.lineCap = 'round';
+  for (let i = 0; i < 3; i++) {
+    const sx = x - s * 0.55 + i * s * 0.52;
+    g.beginPath(); g.arc(sx, y - s * 0.28, s * 0.38, 0.22, Math.PI - 0.22); g.stroke();
+  }
+  g.restore();
+  // Eye on LEFT (head)
+  g.fillStyle = '#101018'; g.beginPath(); g.arc(x - s * 1.22, y - s * 0.06, s * 0.14, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#fff';    g.beginPath(); g.arc(x - s * 1.20, y - s * 0.09, s * 0.055, 0, Math.PI * 2); g.fill();
+}
+
+// Huso (鳇鱼): dark brown, elongated, slightly pointed snout, dense scale texture, wide tail
+function _drawHuso(g, x, y, s) {
+  // Dark brown elongated body
+  g.fillStyle = '#4a3018';
+  g.beginPath(); g.ellipse(x, y, s * 1.85, s * 0.42, 0, 0, Math.PI * 2); g.fill();
+  // Slightly lighter dorsal ridge
+  g.fillStyle = '#5e4022';
+  g.beginPath(); g.ellipse(x - s * 0.25, y - s * 0.05, s * 1.35, s * 0.24, 0, 0, Math.PI * 2); g.fill();
+  // Wide forked tail on RIGHT
+  g.fillStyle = '#362010';
+  g.beginPath();
+  g.moveTo(x + s * 1.58, y);
+  g.lineTo(x + s * 2.35, y - s * 0.68);
+  g.lineTo(x + s * 2.0,  y - s * 0.16);
+  g.lineTo(x + s * 2.0,  y + s * 0.16);
+  g.lineTo(x + s * 2.35, y + s * 0.68);
+  g.closePath(); g.fill();
+  // Dense scale texture: 3 rows of short arcs
+  g.save(); g.strokeStyle = 'rgba(95,60,24,0.48)'; g.lineWidth = s * 0.058; g.lineCap = 'round';
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 5; col++) {
+      const sx2 = x - s * 0.85 + col * s * 0.44;
+      const sy2 = y - s * 0.16 + row * s * 0.18;
+      g.beginPath(); g.arc(sx2, sy2, s * 0.20, 0.28, Math.PI - 0.28); g.stroke();
+    }
+  }
+  g.restore();
+  // Pointed snout extension (left of main ellipse)
+  g.fillStyle = '#3a2410';
+  g.beginPath();
+  g.moveTo(x - s * 1.75, y);
+  g.lineTo(x - s * 1.32, y - s * 0.15);
+  g.lineTo(x - s * 1.32, y + s * 0.15);
+  g.closePath(); g.fill();
+  // Eye on LEFT
+  g.fillStyle = '#0a0806'; g.beginPath(); g.arc(x - s * 1.18, y - s * 0.05, s * 0.12, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#fff';    g.beginPath(); g.arc(x - s * 1.16, y - s * 0.08, s * 0.045, 0, Math.PI * 2); g.fill();
 }
 
 function drawFishingRipple(wx, wy) {
@@ -3807,6 +4054,8 @@ function applyLanguageLabels() {
   document.getElementById('stLangLabel').textContent    = t('language');
   document.getElementById('stRedeemLabel').textContent  = t('redeem');
   closeBtn.textContent          = t('close');
+  document.getElementById('resetProgressBtn').textContent =
+    settings.language !== 'en' ? '重置所有进度' : 'Reset All Progress';
   nameInput.placeholder         = t('namePlaceholder');
   redeemInput.placeholder       = t('redeemPlaceholder');
   genderSeg.querySelector('[data-gender="male"]').textContent   = t('male');
@@ -3851,6 +4100,30 @@ function closeSettings() {
 settingsBtn.addEventListener('click', openSettings);
 closeBtn.addEventListener('click', closeSettings);
 settingsModal.addEventListener('click', e => { if (e.target === settingsModal) closeSettings(); });
+
+// ── Reset all progress ────────────────────────────────────────────────────────
+document.getElementById('resetProgressBtn').addEventListener('click', () => {
+  const zh = settings.language !== 'en';
+  const msg = zh
+    ? '确定要清空所有存档吗？\n\n金币、物品、成就、宝箱状态、已砍树木、采摘状态、地图编辑等\n所有游戏数据将被清除，页面将自动重新加载。此操作不可恢复！'
+    : 'Clear all save data?\n\nGold, items, achievements, chest states, chopped trees,\npicked plants, map edits and all other game data will be deleted.\nThe page will reload. This cannot be undone!';
+  if (!confirm(msg)) return;
+
+  // Collect all mygame_* and mapExplorer* keys to delete.
+  // mapExplorerSettings is kept so the player's name / language / clothes survive.
+  const toDelete = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k.startsWith('mygame_') || k.startsWith('mapExplorer')) {
+      if (k !== 'mapExplorerSettings') toDelete.push(k);
+    }
+  }
+  toDelete.forEach(k => { try { localStorage.removeItem(k); } catch(_) {} });
+
+  // Reload from scratch — all in-memory state rebuilds cleanly on next load.
+  location.reload();
+});
 
 // ── Admin enable / disable / reset ────────────────────────────────────────────
 // Admin mode is session-only: it never auto-logs-in. The redeem code must be
@@ -4369,6 +4642,12 @@ function openDriftBottle() {
 driftCloseBtn.addEventListener('click', () => driftModal.classList.add('hidden'));
 driftModal.addEventListener('click', e => { if (e.target === driftModal) driftModal.classList.add('hidden'); });
 
+// ── Stele modal ───────────────────────────────────────────────────────────────
+document.getElementById('steleCloseBtn').addEventListener('click', closeSteleModal);
+document.getElementById('steleModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('steleModal')) closeSteleModal();
+});
+
 // ── Firebase 启动加载 ──────────────────────────────────────────────────────────
 // 尝试从 Firebase 加载最新地图；Firebase 未就绪时降级用 localStorage
 function applyCanonical(canon) {
@@ -4389,6 +4668,7 @@ function applyCanonical(canon) {
   generateBerryBushes();
   loadBerryState();
   renderBerryCanvas();
+  loadOpenedChests(); // restore which chests are already looted after map update
 }
 
 function startGame() {
