@@ -223,9 +223,16 @@
     }
     .qty-row button:hover { background: rgba(255,255,255,0.16); }
     .qty-num {
-      width: 32px; text-align: center; font-size: 13px; font-weight: 600;
-      color: #ffd84d; user-select: none;
+      width: 36px; height: 24px; text-align: center; font-size: 13px; font-weight: 600;
+      color: #ffd84d;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.12); border-radius: 5px;
+      padding: 0 2px; font-family: inherit;
+      -moz-appearance: textfield; /* Firefox: hide spinner */
     }
+    .qty-num:focus { outline: none; border-color: rgba(255,216,77,0.55); }
+    .qty-num::-webkit-inner-spin-button,
+    .qty-num::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 
     #settingsModal {
       position: fixed; inset: 0; z-index: 30;

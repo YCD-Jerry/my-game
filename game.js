@@ -662,25 +662,25 @@ const PARTICLE_POOL = Array.from({ length: 10 }, () =>
 const FISH_TYPES = [
   // slideSpeed: auto-left/s   jumpDist: space jump   hold: success seconds needed   escapeTime: fail seconds outside zone
   // zoneWidthMin/Max   zoneWidthChangeSpeed   zoneSpeedMax   zonePauseMin/Max   zoneJumpEvery
-  // Probs are CUMULATIVE. Order: grass_carp 30%, bass 20%, red_carp 25%, goldfish 17%, huso 8%
-  { key: 'grass_carp', nameZh: '草鱼',  nameEn: 'Grass Carp', prob: 0.30,
-    slideSpeed: 0.07, jumpDist: 0.044, hold: 3.0, escapeTime: 5.0,
-    zoneWidthMin: 0.15, zoneWidthMax: 0.25, zoneWidthChangeSpeed: 0.15,
+  // Equal 20% probability for all five fish (cumulative: 0.20, 0.40, 0.60, 0.80, 1.00)
+  { key: 'grass_carp', nameZh: '草鱼',  nameEn: 'Grass Carp', prob: 0.20,
+    slideSpeed: 0.055, jumpDist: 0.055, hold: 3.0, escapeTime: 5.0,
+    zoneWidthMin: 0.075, zoneWidthMax: 0.125, zoneWidthChangeSpeed: 0.15,
     zoneSpeedMax: 0.06, zonePauseMin: 0.5, zonePauseMax: 1.5, zoneJumpEvery: 0 },
-  { key: 'bass',       nameZh: '鲈鱼',  nameEn: 'Bass',        prob: 0.50,
-    slideSpeed: 0.09, jumpDist: 0.042, hold: 3.5, escapeTime: 2.5,
-    zoneWidthMin: 0.13, zoneWidthMax: 0.20, zoneWidthChangeSpeed: 0.22,
+  { key: 'bass',       nameZh: '鲈鱼',  nameEn: 'Bass',        prob: 0.40,
+    slideSpeed: 0.075, jumpDist: 0.050, hold: 3.5, escapeTime: 5.0,
+    zoneWidthMin: 0.065, zoneWidthMax: 0.10, zoneWidthChangeSpeed: 0.22,
     zoneSpeedMax: 0.12, zonePauseMin: 0.3, zonePauseMax: 1.0, zoneJumpEvery: 0 },
-  { key: 'red_carp',   nameZh: '红鲤鱼', nameEn: 'Red Carp',   prob: 0.75,
-    slideSpeed: 0.13, jumpDist: 0.040, hold: 4.0, escapeTime: 5.0,
-    zoneWidthMin: 0.12, zoneWidthMax: 0.22, zoneWidthChangeSpeed: 0.40,
+  { key: 'red_carp',   nameZh: '红鲤鱼', nameEn: 'Red Carp',   prob: 0.60,
+    slideSpeed: 0.09, jumpDist: 0.050, hold: 4.0, escapeTime: 5.0,
+    zoneWidthMin: 0.06, zoneWidthMax: 0.11, zoneWidthChangeSpeed: 0.40,
     zoneSpeedMax: 0.20, zonePauseMin: 0.1, zonePauseMax: 0.6, zoneJumpEvery: 6.5 },
-  { key: 'goldfish',   nameZh: '金鱼',   nameEn: 'Goldfish',   prob: 0.92,
-    slideSpeed: 0.20, jumpDist: 0.035, hold: 6.0, escapeTime: 5.0,
+  { key: 'goldfish',   nameZh: '金鱼',   nameEn: 'Goldfish',   prob: 0.80,
+    slideSpeed: 0.13, jumpDist: 0.045, hold: 6.0, escapeTime: 5.0,
     zoneWidthMin: 0.08, zoneWidthMax: 0.18, zoneWidthChangeSpeed: 0.80,
     zoneSpeedMax: 0.45, zonePauseMin: 0,   zonePauseMax: 0.05, zoneJumpEvery: 4.0 },
   { key: 'huso',       nameZh: '鳇鱼',  nameEn: 'Huso',        prob: 1.00,
-    slideSpeed: 0.22, jumpDist: 0.032, hold: 6.0, escapeTime: 1.5,
+    slideSpeed: 0.16, jumpDist: 0.040, hold: 12.0, escapeTime: 4.0,
     zoneWidthMin: 0.07, zoneWidthMax: 0.17, zoneWidthChangeSpeed: 0.85,
     zoneSpeedMax: 0.48, zonePauseMin: 0,   zonePauseMax: 0.03, zoneJumpEvery: 3.5 },
 ];
@@ -2584,8 +2584,8 @@ function handleFishingSpace() {
     fishing.phase = 'wait'; fishing.lineLen = 0;
     fishing.waitTimer = 120 + Math.floor(Math.random() * 180);
   } else if (fishing.phase === 'pull') {
-    // Space sets a rightward target; jumps can stack if pressed repeatedly
-    const base = (fishing.sliderTarget != null ? fishing.sliderTarget : fishing.sliderPos);
+    // Smooth slide right: set/extend the target; animation runs in updateFishing
+    const base = fishing.sliderTarget != null ? fishing.sliderTarget : fishing.sliderPos;
     fishing.sliderTarget = Math.min(1, base + fishing.fish.jumpDist);
   } else if (fishing.phase === 'result') {
     if (Date.now() - (fishing.resultAt || 0) < 2000) return; // 2-second cooldown
@@ -2650,12 +2650,11 @@ function updateFishing() {
     // ── 1. Auto-slide left (fish pulling) ────────────────────────────────────
     f.sliderPos -= f.fish.slideSpeed * dt;
 
-    // ── 2. Smooth rightward movement toward sliderTarget ─────────────────────
-    //    Net rightward speed = jumpDist / 0.12 so transit ≈ 0.12-0.17s per jump.
-    //    While moving through the zone, that time still counts (handled below).
+    // ── 2. Smooth rightward slide toward sliderTarget (~0.15 s transit)
+    //    The zone check below runs every frame, so time spent inside while sliding counts.
     if (f.sliderTarget != null) {
-      const rightSpeed = f.fish.jumpDist / 0.12; // fast enough for ≈0.15s feel
-      f.sliderPos = Math.min(f.sliderTarget, f.sliderPos + rightSpeed * dt);
+      const spd = f.fish.jumpDist / 0.12;
+      f.sliderPos = Math.min(f.sliderTarget, f.sliderPos + spd * dt);
       if (f.sliderPos >= f.sliderTarget) f.sliderTarget = null;
     }
 
@@ -3391,7 +3390,7 @@ function drawCookingMinigame() {
     } else {
       const qn     = cookQualityName(mg.zone, mg.recipe, zh);
       const hColor = mg.zone === 'legendary'    ? '#ff3030'
-                   : mg.zone === 'perfect'      ? '#ffd84d'
+                   : mg.zone === 'perfect'      ? '#22c258'
                    : mg.zone === 'undercooked'  ? '#90c8f0'
                    : mg.zone === 'slight_burnt' ? '#e08030'
                    :                              '#70e890';
@@ -3982,7 +3981,14 @@ const publishBtn    = document.getElementById('publishBtn');
 document.querySelectorAll('.admin-section-hdr').forEach(hdr => {
   const sectionId = hdr.dataset.section;
   const body = hdr.nextElementSibling;
-  body.style.maxHeight = body.scrollHeight + 'px';
+  // Brushes: expanded by default.  Inventory Editor: collapsed by default.
+  if (sectionId === 'inv') {
+    hdr.classList.add('collapsed');
+    body.classList.add('collapsed');
+    body.style.maxHeight = '0px';
+  } else {
+    body.style.maxHeight = body.scrollHeight + 'px';
+  }
   hdr.addEventListener('click', () => {
     const collapsed = hdr.classList.toggle('collapsed');
     body.classList.toggle('collapsed', collapsed);
@@ -4008,12 +4014,11 @@ langSeg.querySelectorAll('button').forEach(b => {
 nameInput.addEventListener('input', () => { settings.name = nameInput.value; saveSettings(); });
 
 // Redeem code → unlock admin map editor
+// Rich codes trigger immediately on input (instant feedback is fine)
 redeemInput.addEventListener('input', () => {
   const raw = redeemInput.value.trim();
   if (!raw) return;
   const lower = raw.toLowerCase();
-
-  // ── Rich code (case-insensitive, one-time) ────────────────────────────────
   if (lower === 'v我50' || lower === 'makemerich') {
     redeemInput.value = '';
     if (richCodeUsed) {
@@ -4025,10 +4030,12 @@ redeemInput.addEventListener('input', () => {
       saveInventory();
       showNotif(t('richCodeOk'));
     }
-    return;
   }
+});
 
-  // ── Admin code (SHA-256) ──────────────────────────────────────────────────
+// Admin code requires explicit confirmation (Enter key) to prevent accidental activation
+function _tryAdminCode() {
+  const raw = redeemInput.value.trim();
   if (raw.length < 4) return;
   const enc = new TextEncoder();
   crypto.subtle.digest('SHA-256', enc.encode(raw)).then(buf => {
@@ -4040,6 +4047,9 @@ redeemInput.addEventListener('input', () => {
       showNotif(t('adminOn'));
     }
   });
+}
+redeemInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { _tryAdminCode(); e.preventDefault(); }
 });
 
 // ── Admin editor: brush palette ───────────────────────────────────────────────
@@ -4217,6 +4227,7 @@ publishBtn.addEventListener('click', () => {
     'window.PUBLISHED_MAP = ' + JSON.stringify(merged) + ';\n' +
     '// Full canonical map snapshot — loaded on startup to bypass procedural generation.\n' +
     'window.PUBLISHED_CANONICAL = ' + JSON.stringify({ map: flat, decos, palmOnSand: ps }) + ';\n';
+  // Download mapdata.js (legacy script-tag format)
   const blob = new Blob([content], { type: 'text/javascript' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
@@ -4224,10 +4235,22 @@ publishBtn.addEventListener('click', () => {
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 
+  // Download mapdata.json (pure JSON for fetch-based fallback / GitHub Pages)
+  const canonData = { map: flat, decos, palmOnSand: ps };
+  const jBlob = new Blob([JSON.stringify(canonData)], { type: 'application/json' });
+  const jUrl  = URL.createObjectURL(jBlob);
+  const jA    = document.createElement('a');
+  jA.href = jUrl; jA.download = 'mapdata.json';
+  document.body.appendChild(jA); jA.click(); jA.remove();
+  URL.revokeObjectURL(jUrl);
+
+  // Also push to Firebase so foreign users get it immediately
+  if (window.__firebase) window.__firebase.saveCanonical(canonData);
+
   Object.assign(publishedMap, merged);
   mapEdits = {};
   saveMapEdits();
-  lootMessage = { text: t('published'), timer: 240 };
+  lootMessage = { text: '☁️ 已同步至Firebase，请同时 git push 更新静态备份', timer: 300 };
 });
 
 refreshSettingsUI();
@@ -4262,6 +4285,18 @@ const shopItemEl  = document.getElementById('shopItemList');
 const shopGoldEl  = document.getElementById('shopGold');
 const shopTitleEl = document.getElementById('shopTitle');
 
+// Hold-to-repeat for +/- buttons: fires immediately then repeats after 350ms at 80ms interval
+function _addHoldRepeat(btn, action) {
+  let _t = null;
+  const start = () => { action(); _t = setTimeout(() => { _t = setInterval(action, 80); }, 350); };
+  const stop  = () => { clearInterval(_t); _t = null; };
+  btn.addEventListener('mousedown',  e => { if (e.button === 0) start(); });
+  btn.addEventListener('mouseup',    stop);
+  btn.addEventListener('mouseleave', stop);
+  btn.addEventListener('touchstart', e => { e.preventDefault(); start(); }, { passive: false });
+  btn.addEventListener('touchend',   stop);
+}
+
 function openShopUI() {
   shopTitleEl.textContent = t('shopTitle');
   shopCloseEl.textContent = t('shopClose');
@@ -4280,10 +4315,10 @@ function openShopUI() {
     const priceEl = document.createElement('div');  priceEl.className = 'si-price';
     info.append(nameEl, priceEl);
 
-    // Quantity stepper
-    const qRow  = document.createElement('div');  qRow.className = 'qty-row';
+    // Quantity stepper (input + hold-to-repeat)
+    const qRow  = document.createElement('div');    qRow.className = 'qty-row';
     const qMinus= document.createElement('button'); qMinus.textContent = '−';
-    const qNum  = document.createElement('span');  qNum.className = 'qty-num';
+    const qNum  = document.createElement('input');  qNum.type = 'number'; qNum.className = 'qty-num'; qNum.min = '1';
     const qPlus = document.createElement('button'); qPlus.textContent = '+';
     qRow.append(qMinus, qNum, qPlus);
 
@@ -4296,16 +4331,26 @@ function openShopUI() {
     const refresh = () => {
       const max = Math.floor(inventory.gold / item.price);
       qty = Math.max(1, Math.min(qty, max || 1));
-      qNum.textContent  = qty;
+      qNum.value = qty;
       priceEl.textContent = t('shopPrice', item.price * qty);
-      buyBtn.disabled   = inventory.gold < item.price * qty;
-      qMinus.disabled   = qty <= 1;
-      qPlus.disabled    = qty >= Math.max(1, max);
+      buyBtn.disabled = inventory.gold < item.price * qty;
+      qMinus.disabled = qty <= 1;
+      qPlus.disabled  = qty >= Math.max(1, max);
     };
     refresh();
 
-    qMinus.addEventListener('click', () => { qty = Math.max(1, qty - 1); refresh(); });
-    qPlus.addEventListener('click',  () => { qty = Math.min(Math.floor(inventory.gold / item.price) || 1, qty + 1); refresh(); });
+    // Direct number input
+    qNum.addEventListener('change', () => {
+      qty = Math.max(1, Math.min(parseInt(qNum.value) || 1, Math.floor(inventory.gold / item.price) || 1));
+      refresh();
+    });
+    qNum.addEventListener('keydown', e => { if (e.key === 'Enter') qNum.blur(); });
+
+    // Hold-to-repeat buttons
+    const decShop = () => { qty = Math.max(1, qty - 1); refresh(); };
+    const incShop = () => { qty = Math.min(Math.floor(inventory.gold / item.price) || 1, qty + 1); refresh(); };
+    _addHoldRepeat(qMinus, decShop);
+    _addHoldRepeat(qPlus,  incShop);
 
     buyBtn.addEventListener('click', () => {
       const total = item.price * qty;
@@ -4360,7 +4405,7 @@ function openCookUI() {
     const acts   = document.createElement('div');  acts.className = 'rr-acts';
     const qRow   = document.createElement('div');  qRow.className = 'qty-row';
     const qMinus = document.createElement('button'); qMinus.textContent = '−';
-    const qNum   = document.createElement('span');  qNum.className = 'qty-num';
+    const qNum   = document.createElement('input'); qNum.type = 'number'; qNum.className = 'qty-num'; qNum.min = '1';
     const qPlus  = document.createElement('button'); qPlus.textContent = '+';
     qRow.append(qMinus, qNum, qPlus);
 
@@ -4393,7 +4438,7 @@ function openCookUI() {
       });
 
       qRow.style.display  = cur < 1 ? 'none' : '';
-      qNum.textContent    = qty;
+      qNum.value          = qty;
       qMinus.disabled     = qty <= 1;
       qPlus.disabled      = qty >= Math.max(1, cur);
       cookBtn.textContent = t('cook');
@@ -4401,8 +4446,18 @@ function openCookUI() {
     };
     refresh();
 
-    qMinus.addEventListener('click', () => { qty = Math.max(1, qty - 1); refresh(); });
-    qPlus.addEventListener('click',  () => { qty = Math.min(maxCookable(recipe) || 1, qty + 1); refresh(); });
+    // Direct number input
+    qNum.addEventListener('change', () => {
+      qty = Math.max(1, Math.min(parseInt(qNum.value) || 1, maxCookable(recipe) || 1));
+      refresh();
+    });
+    qNum.addEventListener('keydown', e => { if (e.key === 'Enter') qNum.blur(); });
+
+    // Hold-to-repeat buttons
+    const decCook = () => { qty = Math.max(1, qty - 1); refresh(); };
+    const incCook = () => { qty = Math.min(maxCookable(recipe) || 1, qty + 1); refresh(); };
+    _addHoldRepeat(qMinus, decCook);
+    _addHoldRepeat(qPlus,  incCook);
 
     cookBtn.addEventListener('click', () => {
       if (maxCookable(recipe) < qty) { showNotif(t('cookMissing')); return; }
@@ -4685,8 +4740,17 @@ document.getElementById('steleModal').addEventListener('click', e => {
   if (e.target === document.getElementById('steleModal')) closeSteleModal();
 });
 
-// ── Firebase 启动加载 ──────────────────────────────────────────────────────────
-// 尝试从 Firebase 加载最新地图；Firebase 未就绪时降级用 localStorage
+// ── Startup map loading (three-tier fallback) ─────────────────────────────────
+// 1) Firebase  (3s timeout, for international users — real-time latest)
+// 2) ./mapdata.json  (static JSON on same server, for domestic/GitHub Pages users)
+// 3) Procedural generation  (always available as last resort)
+function _tryFetchMapdataJson() {
+  return fetch('./mapdata.json')
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(canon => { if (canon) applyCanonical(canon); })
+    .catch(() => { /* mapdata.json missing — procedural map is already rendered */ });
+}
+
 function applyCanonical(canon) {
   if (!canon || !Array.isArray(canon.map) || canon.map.length !== ROWS * COLS) return;
   canon.map.forEach((v, i) => { map[Math.floor(i / COLS)][i % COLS] = v; });
@@ -4713,22 +4777,32 @@ function startGame() {
   loop();
 
   if (window.__firebase) {
-    // 从 Firebase 加载最新地图
-    window.__firebase.loadCanonical().then(canon => {
-      if (canon) {
-        window.PUBLISHED_CANONICAL = canon;
-        applyCanonical(canon);
-      }
-      // 实时监听：管理员改动后所有玩家自动更新
-      window.__firebase.listen(newCanon => {
-        window.PUBLISHED_CANONICAL = newCanon;
-        applyCanonical(newCanon);
+    // Tier 1: Firebase with 3-second timeout
+    const timeout3s = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('firebase-timeout')), 3000));
+
+    Promise.race([window.__firebase.loadCanonical(), timeout3s])
+      .then(canon => {
+        if (canon) { window.PUBLISHED_CANONICAL = canon; applyCanonical(canon); }
+        // Real-time listener (no timeout — updates arrive asynchronously)
+        window.__firebase.listen(newCanon => {
+          window.PUBLISHED_CANONICAL = newCanon;
+          applyCanonical(newCanon);
+        });
+      })
+      .catch(() => {
+        // Tier 2: static mapdata.json (GitHub Pages / domestic CDN)
+        console.log('[map] Firebase timeout/unavailable — falling back to mapdata.json');
+        _tryFetchMapdataJson();
       });
-    });
+  } else {
+    // Firebase SDK not loaded: go straight to Tier 2
+    _tryFetchMapdataJson();
+    // Tier 3 (procedural) is the already-rendered map — no action needed
   }
 }
 
-// 等 Firebase 就绪再启动（最多等 2 秒，超时直接启动）
+// Wait for Firebase SDK (max 2 s), then start
 if (window.__firebase) {
   startGame();
 } else {
