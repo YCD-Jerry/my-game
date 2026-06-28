@@ -376,13 +376,23 @@
     }
     #cookPanel h2 { font-size: 17px; margin-bottom: 14px; color: #ffd84d; font-weight: 600; }
     .recipe-row {
-      display: flex; align-items: flex-start; gap: 10px;
-      padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,0.07);
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
     }
     .recipe-row:last-of-type { border-bottom: 0; }
-    .recipe-row .rr-icon { font-size: 24px; flex: 0 0 auto; padding-top: 2px; }
-    .recipe-row .rr-info { flex: 1 1 auto; }
-    .recipe-row .rr-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+    /* header row: icon · name · (qty + cook) */
+    .rr-header {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    }
+    .rr-header .rr-icon { font-size: 20px; flex: 0 0 auto; }
+    .rr-header .rr-name { font-size: 13px; font-weight: 600; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* right-side actions: qty stepper + cook button */
+    .rr-acts { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+    .rr-acts button.rr-cook { padding: 5px 11px; border: 0; border-radius: 8px;
+      cursor: pointer; font-size: 12px; font-weight: 600; font-family: inherit; }
+    .rr-acts button.rr-cook:not(:disabled) { background: #ffd84d; color: #1a1a1c; }
+    .rr-acts button.rr-cook:disabled { background: rgba(255,255,255,0.1); color: #555; cursor: default; }
+    /* ingredient chips row */
     .recipe-row .rr-needs { display: flex; flex-wrap: wrap; gap: 4px; }
     .rr-chip {
       font-size: 11px; padding: 2px 7px; border-radius: 8px;
@@ -390,13 +400,6 @@
     }
     .rr-chip.ok  { background: rgba(100,200,100,0.18); color: #90e890; }
     .rr-chip.bad { background: rgba(255,80,80,0.18);   color: #ff9090; }
-    .recipe-row button {
-      flex: 0 0 auto; padding: 6px 13px; border: 0; border-radius: 8px;
-      cursor: pointer; font-size: 12px; font-weight: 600; font-family: inherit;
-      align-self: center;
-    }
-    .recipe-row button:not(:disabled) { background: #ffd84d; color: #1a1a1c; }
-    .recipe-row button:disabled { background: rgba(255,255,255,0.1); color: #666; cursor: default; }
     #cookCloseBtn {
       width: 100%; margin-top: 14px; padding: 10px; border: 0; border-radius: 9px;
       cursor: pointer; background: rgba(255,255,255,0.12); color: #f0f0f2;

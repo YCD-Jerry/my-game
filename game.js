@@ -62,8 +62,9 @@ const inventory  = {
   friedCabbage: 0, pepperCabbage: 0, cabbagePork: 0,
   redBraisedPork: 0, friedPork: 0, mincedMeatRice: 0,
   tomatoSoup: 0, sweetPancake: 0,
-  // fish (from fishing)
+  // fish (from fishing) + fish/berry dishes
   grass_carp: 0, red_carp: 0, goldfish: 0, fish_meat: 0,
+  grilledFish: 0, strawberryJelly: 0, blueberryPie: 0, fishBlueSoup: 0,
   // materials (from chopping trees)
   lumber: 0, pinecone: 0,
   // special items
@@ -219,23 +220,55 @@ function protectBuilding(col, row) { BUILDING_TILES.add(`${col},${row}`); }
 protectBuilding(SHOP_COL,  SHOP_ROW);
 protectBuilding(STOVE_COL, STOVE_ROW);
 
-// ── Recipes (15 dishes) ───────────────────────────────────────────────────────
+// ── Recipes (19 dishes) ──────────────────────────────────────────────────────
+// cookZones: [coldEnd, normal1End, perfectEnd, normal2End]  (0-1 fractions)
+// cookSpeed: pointer movement per frame (higher = faster = harder)
 const RECIPES = [
-  { key: 'scrambledEgg',  icon: '🍳', needs: { tomato:1, egg:1, salt:1, sugar:1 } },
-  { key: 'candiedApple',  icon: '🍯', needs: { apple:1, sugar:1 } },
-  { key: 'steamedRice',   icon: '🥣', needs: { rice:1 } },
-  { key: 'tomatoNoodles', icon: '🍜', needs: { tomato:1, egg:1, salt:1, sugar:1, flour:1 } },
-  { key: 'tomatoEggRice', icon: '🥘', needs: { tomato:1, egg:1, salt:1, sugar:1, cabbage:1, rice:1 } },
-  { key: 'friedEgg',      icon: '🍳', needs: { egg:1, salt:1 } },
-  { key: 'eggFriedRice',  icon: '🍚', needs: { egg:1, rice:1, salt:1 } },
-  { key: 'friedCabbage',  icon: '🫑', needs: { cabbage:1, salt:1 } },
-  { key: 'pepperCabbage', icon: '🌿', needs: { cabbage:1, salt:1, pepper:1 } },
-  { key: 'cabbagePork',   icon: '🥗', needs: { cabbage:1, meat:1, salt:1 } },
-  { key: 'redBraisedPork',icon: '🍖', needs: { meat:1, sugar:1, salt:1 } },
-  { key: 'friedPork',     icon: '🥓', needs: { meat:1, salt:1, pepper:1 } },
-  { key: 'mincedMeatRice',icon: '🍱', needs: { meat:1, rice:1, salt:1 } },
-  { key: 'tomatoSoup',    icon: '🍵', needs: { tomato:1, salt:1 } },
-  { key: 'sweetPancake',  icon: '🥞', needs: { flour:1, sugar:1 } },
+  // ── 1-ingredient dishes (fastest pointer) ───────────────────────────────────
+  { key: 'steamedRice',    icon: '🥣', needs: { rice:1 },
+    cookZones: [0.30, 0.35, 0.45, 0.50], cookSpeed: 0.0090 },
+  // ── 2-ingredient dishes ─────────────────────────────────────────────────────
+  { key: 'friedEgg',       icon: '🍳', needs: { egg:1, salt:1 },
+    cookZones: [0.38, 0.44, 0.56, 0.62], cookSpeed: 0.0080 },
+  { key: 'candiedApple',   icon: '🍯', needs: { apple:1, sugar:1 },
+    cookZones: [0.38, 0.44, 0.56, 0.62], cookSpeed: 0.0080 },
+  { key: 'tomatoSoup',     icon: '🍵', needs: { tomato:1, salt:1 },
+    cookZones: [0.38, 0.44, 0.56, 0.62], cookSpeed: 0.0080 },
+  { key: 'sweetPancake',   icon: '🥞', needs: { flour:1, sugar:1 },
+    cookZones: [0.38, 0.44, 0.56, 0.62], cookSpeed: 0.0080 },
+  { key: 'friedCabbage',   icon: '🫑', needs: { cabbage:1, salt:1 },
+    cookZones: [0.38, 0.44, 0.56, 0.62], cookSpeed: 0.0080 },
+  // ── 3-ingredient dishes ─────────────────────────────────────────────────────
+  { key: 'eggFriedRice',   icon: '🍚', needs: { egg:1, rice:1, salt:1 },
+    cookZones: [0.45, 0.52, 0.64, 0.70], cookSpeed: 0.0070 },
+  { key: 'pepperCabbage',  icon: '🌿', needs: { cabbage:1, salt:1, pepper:1 },
+    cookZones: [0.45, 0.52, 0.64, 0.70], cookSpeed: 0.0070 },
+  { key: 'cabbagePork',    icon: '🥗', needs: { cabbage:1, meat:1, salt:1 },
+    cookZones: [0.45, 0.52, 0.64, 0.70], cookSpeed: 0.0070 },
+  { key: 'redBraisedPork', icon: '🍖', needs: { meat:1, sugar:1, salt:1 },
+    cookZones: [0.45, 0.52, 0.64, 0.70], cookSpeed: 0.0070 },
+  { key: 'friedPork',      icon: '🥓', needs: { meat:1, salt:1, pepper:1 },
+    cookZones: [0.45, 0.52, 0.64, 0.70], cookSpeed: 0.0070 },
+  { key: 'mincedMeatRice', icon: '🍱', needs: { meat:1, rice:1, salt:1 },
+    cookZones: [0.45, 0.52, 0.64, 0.70], cookSpeed: 0.0070 },
+  // ── 4-ingredient dishes ─────────────────────────────────────────────────────
+  { key: 'scrambledEgg',   icon: '🍳', needs: { tomato:1, egg:1, salt:1, sugar:1 },
+    cookZones: [0.52, 0.58, 0.68, 0.74], cookSpeed: 0.0062 },
+  // ── 5-ingredient dishes ─────────────────────────────────────────────────────
+  { key: 'tomatoNoodles',  icon: '🍜', needs: { tomato:1, egg:1, salt:1, sugar:1, flour:1 },
+    cookZones: [0.58, 0.63, 0.72, 0.77], cookSpeed: 0.0055 },
+  // ── 6-ingredient dishes ─────────────────────────────────────────────────────
+  { key: 'tomatoEggRice',  icon: '🥘', needs: { tomato:1, egg:1, salt:1, sugar:1, cabbage:1, rice:1 },
+    cookZones: [0.63, 0.68, 0.77, 0.82], cookSpeed: 0.0050 },
+  // ── Fish & berry dishes (new) ────────────────────────────────────────────────
+  { key: 'grilledFish',    icon: '🍢', needs: { fish_meat:1 },
+    cookZones: [0.30, 0.35, 0.45, 0.50], cookSpeed: 0.0090 },
+  { key: 'strawberryJelly',icon: '🍮', needs: { strawberry:3 },
+    cookZones: [0.50, 0.58, 0.72, 0.78], cookSpeed: 0.0070 },
+  { key: 'blueberryPie',   icon: '🥧', needs: { blueberry:3 },
+    cookZones: [0.55, 0.63, 0.75, 0.80], cookSpeed: 0.0065 },
+  { key: 'fishBlueSoup',   icon: '🍲', needs: { fish_meat:1, blueberry:2 },
+    cookZones: [0.60, 0.68, 0.78, 0.83], cookSpeed: 0.0060 },
 ];
 
 // All inventory item metadata (for HUD + admin editor)
@@ -827,6 +860,7 @@ const I18N = {
     choppedLumber: '木材 x1', choppedPine: (n) => `木材 x1  松子 x${n}`,
     strawberry: '草莓', blueberry: '蓝莓',
     pressPickStrawberry: '按 F 采摘草莓', pressPickBlueberry: '按 F 采摘蓝莓',
+    grilledFish: '烤鱼', strawberryJelly: '草莓冻', blueberryPie: '蓝莓派', fishBlueSoup: '鱼肉蓝莓汤',
     grass_carp: '草鱼', red_carp: '红鲤鱼', goldfish: '金鱼', fish_meat: '鱼肉',
     bagFish: '鱼类', pressGFish: '[G] 钓鱼',
     slaughterHint: '右键宰杀 → 鱼肉', slaughterDone: '鱼肉 x1',
@@ -882,6 +916,7 @@ const I18N = {
     choppedLumber: 'Lumber x1', choppedPine: (n) => `Lumber x1  Pine Cone x${n}`,
     strawberry: 'Strawberry', blueberry: 'Blueberry',
     pressPickStrawberry: 'Press F to pick Strawberry', pressPickBlueberry: 'Press F to pick Blueberry',
+    grilledFish: 'Grilled Fish', strawberryJelly: 'Strawberry Jelly', blueberryPie: 'Blueberry Pie', fishBlueSoup: 'Fish Blueberry Soup',
     grass_carp: 'Grass Carp', red_carp: 'Red Carp', goldfish: 'Goldfish', fish_meat: 'Fish Meat',
     bagFish: 'Fish', pressGFish: '[G] Fish',
     slaughterHint: 'Right-click to slaughter → Fish Meat', slaughterDone: 'Fish Meat x1',
@@ -2575,10 +2610,11 @@ function drawFishingHints() {
 // ── Cooking mini-game ─────────────────────────────────────────────────────────
 function startCookingMinigame(recipe, qty) {
   closeCookUI();
+  const base = recipe.cookSpeed ?? 0.007;
   cookingMinigame = {
     recipe, qty,
-    pointer: 0.05, dir: 1,
-    speed: 0.0055 + Math.random() * 0.003, // slight per-dish randomness
+    pointer: 0.02, dir: 1,
+    speed: base + (Math.random() - 0.5) * base * 0.15, // ±7.5% per-dish randomness
     phase: 'aim',
     zone: null, resultTimer: 0, particles: [],
   };
@@ -2587,37 +2623,96 @@ function startCookingMinigame(recipe, qty) {
 function handleCookingSpace() {
   if (!cookingMinigame || cookingMinigame.phase !== 'aim') return;
   const mg = cookingMinigame;
-  mg.zone = mg.pointer < 0.40 ? 'cold' : mg.pointer < 0.75 ? 'perfect' : 'burnt';
-  mg.phase = 'result';
-  mg.resultTimer = 90; // 1.5 s at 60 fps
+  const [c, n1, p, n2] = mg.recipe.cookZones ?? [0.40, 0.45, 0.60, 0.65];
+  const ptr  = mg.pointer;
+  const pMid = (n1 + p) / 2;  // centre of the old perfect zone
+  const PH   = 0.02;           // ±2% → 4% wide perfect strip
 
-  // Spawn particles at the pointer position on the bar
+  // 6-tier result (from left to right):
+  // fail | undercooked | normal(lgr) | perfect | [legendary 1%] | perfect | normal(lgr) | slight_burnt | fail
+  const LH = 0.005; // ±0.5% → 1% legendary strip inside the perfect zone
+  mg.zone =
+    (ptr < c)                         ? 'fail'         :
+    (ptr < n1)                        ? 'undercooked'  :
+    (ptr >= n2)                       ? 'fail'         :
+    (ptr >= p)                        ? 'slight_burnt' :
+    (Math.abs(ptr - pMid) < LH)       ? 'legendary'    :
+    (Math.abs(ptr - pMid) < PH)       ? 'perfect'      :
+                                        'normal';
+
+  mg.phase = 'result';
+  mg.resultTimer = 90;
+
+  // Particles at the arc tip
   const W = canvas.width, H = canvas.height;
-  const barW = Math.min(500, W * 0.68), barX = (W - barW) / 2;
-  const barY = H * 0.52, px = barX + mg.pointer * barW;
-  if (mg.zone === 'perfect') {
-    for (let i = 0; i < 22; i++) {
+  const cx = W / 2, cy = H * 0.52;
+  const R  = Math.min(W * 0.23, H * 0.28, 165);
+  const pAngle = COOK_ARC_S + mg.pointer * COOK_ARC_SPAN;
+  const px = cx + Math.cos(pAngle) * R;
+  const py = cy + Math.sin(pAngle) * R;
+
+  if (mg.zone === 'legendary') {
+    for (let i = 0; i < 36; i++) {
       const a = Math.random() * Math.PI * 2;
-      mg.particles.push({
-        x: px, y: barY + 18,
-        vx: Math.cos(a) * (1.5 + Math.random() * 3.5),
-        vy: -(2.5 + Math.random() * 4),
-        color: Math.random() > 0.45 ? '#ffd84d' : '#ffaa20',
-        size: 3 + Math.random() * 3, life: 1,
-      });
+      const r2 = Math.random();
+      mg.particles.push({ x: px, y: py,
+        vx: Math.cos(a) * (2 + Math.random() * 5),
+        vy: Math.sin(a) * (2 + Math.random() * 5) - 2.5,
+        color: r2 < 0.4 ? '#ff2020' : r2 < 0.7 ? '#ffd84d' : '#ff8020',
+        size: 4 + Math.random() * 4, life: 1 });
     }
-  } else if (mg.zone === 'burnt') {
-    for (let i = 0; i < 18; i++) {
-      const gray = 30 + Math.floor(Math.random() * 40);
-      mg.particles.push({
-        x: px + (Math.random() - 0.5) * 24, y: barY + 10,
-        vx: (Math.random() - 0.5) * 1.8,
-        vy: -(0.8 + Math.random() * 2),
-        color: `rgb(${gray},${gray},${gray})`,
-        size: 5 + Math.random() * 6, life: 1,
-      });
+  } else if (mg.zone === 'perfect') {
+    for (let i = 0; i < 24; i++) {
+      const a = Math.random() * Math.PI * 2;
+      mg.particles.push({ x: px, y: py,
+        vx: Math.cos(a) * (1.5 + Math.random() * 3.5),
+        vy: Math.sin(a) * (1.5 + Math.random() * 3.5) - 1.5,
+        color: Math.random() > 0.45 ? '#ffd84d' : '#ffcc30',
+        size: 3 + Math.random() * 3, life: 1 });
+    }
+  } else if (mg.zone === 'undercooked') {
+    for (let i = 0; i < 12; i++) {
+      mg.particles.push({ x: px + (Math.random() - 0.5) * 16, y: py,
+        vx: (Math.random() - 0.5) * 1.2,
+        vy: -(0.5 + Math.random() * 1.2),
+        color: Math.random() > 0.4 ? '#90c8f0' : '#b0dcff',
+        size: 4 + Math.random() * 4, life: 1 });
+    }
+  } else if (mg.zone === 'slight_burnt') {
+    for (let i = 0; i < 14; i++) {
+      mg.particles.push({ x: px + (Math.random() - 0.5) * 18, y: py,
+        vx: (Math.random() - 0.5) * 1.4,
+        vy: -(0.7 + Math.random() * 1.5),
+        color: Math.random() > 0.4 ? '#e08030' : '#f0a040',
+        size: 4 + Math.random() * 5, life: 1 });
+    }
+  } else if (mg.zone === 'fail') {
+    for (let i = 0; i < 14; i++) {
+      const g2 = 35 + Math.floor(Math.random() * 35);
+      mg.particles.push({ x: px + (Math.random() - 0.5) * 20, y: py,
+        vx: (Math.random() - 0.5) * 1.6,
+        vy: -(0.8 + Math.random() * 1.8),
+        color: `rgb(${g2},${g2},${g2})`,
+        size: 5 + Math.random() * 5, life: 1 });
     }
   }
+}
+
+// Returns the quality-prefixed dish name for the given zone
+function cookQualityName(zone, recipe, zh) {
+  const base = t(recipe.key);
+  if (zh) {
+    return zone === 'legendary'    ? `绝世${base}`       :
+           zone === 'perfect'      ? `完美${base}`       :
+           zone === 'undercooked'  ? `差点就熟的${base}` :
+           zone === 'slight_burnt' ? `快要焦了的${base}` :
+                                     `普通${base}`;
+  }
+  return zone === 'legendary'    ? `Legendary ${base}`     :
+         zone === 'perfect'      ? `Perfect ${base}`       :
+         zone === 'undercooked'  ? `Undercooked ${base}`   :
+         zone === 'slight_burnt' ? `Slightly Burnt ${base}` :
+                                   base;
 }
 
 function updateCookingMinigame() {
@@ -2631,8 +2726,9 @@ function updateCookingMinigame() {
     for (const p of mg.particles) {
       if (p.life <= 0) continue;
       p.x += p.vx; p.y += p.vy;
-      if (mg.zone === 'perfect') { p.vy += 0.14; }        // gravity
-      else                       { p.vy -= 0.04; p.size += 0.12; } // smoke rises & expands
+      if      (mg.zone === 'legendary' || mg.zone === 'perfect') { p.vy += 0.14; }     // gold/red-gold: gravity arc
+      else if (mg.zone === 'undercooked') { p.vy -= 0.02; p.size += 0.05; }           // blue: drift slowly
+      else                                { p.vy -= 0.04; p.size += 0.12; }           // smoke: rise & expand
       p.life -= 0.013;
     }
     if (mg.resultTimer <= 0) finishCookingMinigame();
@@ -2641,24 +2737,41 @@ function updateCookingMinigame() {
 
 function finishCookingMinigame() {
   const mg = cookingMinigame;
-  const qty = mg.zone === 'perfect'
-    ? Math.ceil(mg.qty * 1.5)
-    : mg.zone === 'burnt'
-    ? Math.max(1, Math.floor(mg.qty * 0.5))
-    : mg.qty;
-  Object.entries(mg.recipe.needs).forEach(([k, n]) => { inventory[k] -= n * mg.qty; });
-  inventory[mg.recipe.key] = (inventory[mg.recipe.key] || 0) + qty;
-  saveInventory();
-  progressAch('cook');
   const zh = settings.language !== 'en';
-  const prefix = mg.zone === 'perfect'
-    ? (zh ? '✨ 完美烹饪！ ' : '✨ Perfect! ')
-    : mg.zone === 'burnt'
-    ? (zh ? '💨 焦糊了... ' : '💨 Burnt... ')
-    : '';
-  showNotif(prefix + t('cookDone', mg.recipe.icon, t(mg.recipe.key)) + (qty > 1 ? ` ×${qty}` : ''));
+  // Always deduct ingredients (the attempt consumed them)
+  Object.entries(mg.recipe.needs).forEach(([k, n]) => { inventory[k] -= n * mg.qty; });
+  if (mg.zone !== 'fail') {
+    inventory[mg.recipe.key] = (inventory[mg.recipe.key] || 0) + mg.qty;
+    progressAch('cook');
+    const qn = cookQualityName(mg.zone, mg.recipe, zh);
+    const icon = mg.recipe.icon;
+    const suffix = mg.qty > 1 ? ` ×${mg.qty}` : '';
+    if (mg.zone === 'legendary') {
+      showNotif(`🌟 ${icon} ${qn}${suffix}`);
+    } else if (mg.zone === 'perfect') {
+      showNotif(`✨ ${icon} ${qn}${suffix}`);
+    } else {
+      showNotif(`${icon} ${qn}${suffix}`);
+    }
+  } else {
+    showNotif(zh ? '❌ 烹饪失败，食材已消耗' : '❌ Cooking failed — ingredients consumed');
+  }
+  saveInventory();
   cookingMinigame = null;
-  doOpenCooking(); // reopen recipe list
+  doOpenCooking();
+}
+
+// Arc constants: 2/5 circle (144°), opening faces down, pointer sweeps left→right over top
+const COOK_ARC_S    = 198 * Math.PI / 180;  // 198° start (≈10 o'clock)
+const COOK_ARC_SPAN = 144 * Math.PI / 180;  // 144° clockwise to 342° (≈2 o'clock)
+
+// Draw a colored arc segment between two progress values (0-1)
+function _cookArcSegment(cx, cy, r, lw, t0, t1, color) {
+  if (t1 <= t0) return;
+  ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = 'butt';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, COOK_ARC_S + t0 * COOK_ARC_SPAN, COOK_ARC_S + t1 * COOK_ARC_SPAN, false);
+  ctx.stroke();
 }
 
 function drawCookingMinigame() {
@@ -2667,92 +2780,125 @@ function drawCookingMinigame() {
   const zh = settings.language !== 'en';
 
   // Dim backdrop
-  ctx.fillStyle = 'rgba(0,0,0,0.88)';
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(0,0,0,0.90)'; ctx.fillRect(0, 0, W, H);
 
-  // Recipe title
+  // Arc geometry
+  const cx  = W / 2;
+  const cy  = H * 0.54;
+  const R   = Math.min(W * 0.23, H * 0.28, 165);
+  const lw  = Math.max(18, R * 0.13);
+  const [c, n1, p, n2] = mg.recipe.cookZones ?? [0.40, 0.45, 0.60, 0.65];
+
+  // Recipe title (above arc)
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.font = 'bold 24px ' + UI_FONT;
-  ctx.fillStyle = '#ffd84d';
-  ctx.fillText(`${mg.recipe.icon}  ${t(mg.recipe.key)}`, W / 2, H * 0.28);
-  ctx.font = '14px ' + UI_FONT; ctx.fillStyle = '#aaa';
-  ctx.fillText(zh ? `×${mg.qty} 份` : `×${mg.qty} serving${mg.qty > 1 ? 's' : ''}`, W / 2, H * 0.28 + 34);
+  ctx.font = 'bold 22px ' + UI_FONT; ctx.fillStyle = '#ffd84d';
+  ctx.fillText(`${mg.recipe.icon}  ${t(mg.recipe.key)}`, cx, H * 0.16);
+  ctx.font = '13px ' + UI_FONT; ctx.fillStyle = '#aaa';
+  ctx.fillText(zh ? `×${mg.qty} 份` : `×${mg.qty}`, cx, H * 0.22);
 
-  const barW = Math.min(500, W * 0.68), barH = 40;
-  const barX = (W - barW) / 2, barY = H * 0.52;
+  const dim = mg.phase === 'result' ? 0.35 : 1;
+
+  // Background track
+  ctx.save(); ctx.globalAlpha = dim * 0.35;
+  ctx.strokeStyle = 'rgba(80,80,90,0.8)'; ctx.lineWidth = lw + 6; ctx.lineCap = 'butt';
+  ctx.beginPath(); ctx.arc(cx, cy, R, COOK_ARC_S, COOK_ARC_S + COOK_ARC_SPAN, false); ctx.stroke();
+  ctx.restore();
+
+  // Colored zones — 5-color arc
+  const pMid = (n1 + p) / 2, PH = 0.02;
+  ctx.save(); ctx.globalAlpha = dim;
+  const pale      = 'rgba(210,215,225,0.50)'; // fail (white-ish)
+  const yellow    = '#ffd84d';                 // normal (yellow)
+  const lgr       = 'rgba(100,210,140,0.85)'; // normal (light green)
+  const dgr       = '#0d7a34';                 // perfect (dark green)
+  _cookArcSegment(cx, cy, R, lw, 0,           c,           pale);   // fail left
+  _cookArcSegment(cx, cy, R, lw, c,           n1,          yellow); // normal yellow left
+  _cookArcSegment(cx, cy, R, lw, n1,          pMid - PH,   lgr);    // normal light-green left
+  _cookArcSegment(cx, cy, R, lw, pMid - PH,   pMid + PH,   dgr);    // perfect dark-green strip
+  // Secret legendary red line — 1% wide, no text label (hidden easter egg)
+  _cookArcSegment(cx, cy, R, lw + 2, pMid - 0.005, pMid + 0.005, '#ff2020');
+  _cookArcSegment(cx, cy, R, lw, pMid + PH,   p,           lgr);    // normal light-green right
+  _cookArcSegment(cx, cy, R, lw, p,           n2,          yellow); // normal yellow right
+  _cookArcSegment(cx, cy, R, lw, n2,          1,           pale);   // fail right
+  ctx.restore();
+
+  // Pointer needle
+  const pAngle = COOK_ARC_S + mg.pointer * COOK_ARC_SPAN;
+  const tipX   = cx + Math.cos(pAngle) * R;
+  const tipY   = cy + Math.sin(pAngle) * R;
+
+  ctx.save(); ctx.globalAlpha = dim;
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(tipX, tipY); ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(tipX, tipY, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ddd'; ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
 
   if (mg.phase === 'aim') {
-    // Heat bar background
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    roundRectPath(ctx, barX - 8, barY - 8, barW + 16, barH + 16, 10); ctx.fill();
-
-    // Zone fills
-    ctx.fillStyle = '#2050c0'; ctx.fillRect(barX, barY, barW * 0.40, barH);            // cold
-    ctx.fillStyle = '#18883a'; ctx.fillRect(barX + barW * 0.40, barY, barW * 0.35, barH); // perfect
-    ctx.fillStyle = '#b82020'; ctx.fillRect(barX + barW * 0.75, barY, barW * 0.25, barH); // burnt
-
-    // Zone border lines
-    ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(barX + barW * 0.40, barY); ctx.lineTo(barX + barW * 0.40, barY + barH); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(barX + barW * 0.75, barY); ctx.lineTo(barX + barW * 0.75, barY + barH); ctx.stroke();
-
-    // Zone labels
-    ctx.font = '600 12px ' + UI_FONT; ctx.fillStyle = 'rgba(255,255,255,0.75)';
-    ctx.fillText(zh ? '生冷' : 'Raw',     barX + barW * 0.20, barY + barH / 2);
-    ctx.fillText(zh ? '完美' : 'Perfect', barX + barW * 0.575, barY + barH / 2);
-    ctx.fillText(zh ? '焦糊' : 'Burnt',   barX + barW * 0.875, barY + barH / 2);
-
-    // Moving pointer
-    const ptrX = barX + mg.pointer * barW;
-    ctx.fillStyle = '#fff'; ctx.fillRect(ptrX - 4, barY - 10, 8, barH + 20);
-    ctx.fillStyle = '#111'; ctx.fillRect(ptrX - 1, barY - 8, 2, barH + 16);
+    // Zone labels outside the arc
+    ctx.font = '600 11px ' + UI_FONT;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const labelR  = R + lw * 0.95;
+    const midA    = (a, b) => COOK_ARC_S + (a + b) / 2 * COOK_ARC_SPAN;
+    const lx      = (a, b) => cx + Math.cos(midA(a, b)) * labelR;
+    const ly      = (a, b) => cy + Math.sin(midA(a, b)) * labelR;
+    // Fail zones
+    ctx.fillStyle = 'rgba(190,190,205,0.75)';
+    if (c > 0.06) ctx.fillText(zh ? '失败' : 'Fail', lx(0, c),  ly(0, c));
+    if (n2 < 0.94) ctx.fillText(zh ? '失败' : 'Fail', lx(n2, 1), ly(n2, 1));
+    // Normal zones (yellow)
+    ctx.fillStyle = '#ffd84d';
+    if (n1 - c  > 0.04) ctx.fillText(zh ? '差点就熟' : 'Almost!',      lx(c,  n1), ly(c,  n1));
+    if (n2 - p  > 0.04) ctx.fillText(zh ? '快要焦了！' : 'Almost burnt!', lx(p,  n2), ly(p,  n2));
+    // Normal zones (light green) — only label if wide enough
+    ctx.fillStyle = 'rgba(100,210,140,0.9)';
+    if (pMid - PH - n1 > 0.05) ctx.fillText(zh ? '普通' : 'OK', lx(n1, pMid - PH), ly(n1, pMid - PH));
+    if (p - (pMid + PH) > 0.05) ctx.fillText(zh ? '普通' : 'OK', lx(pMid + PH, p),  ly(pMid + PH, p));
+    // Perfect strip label (small, above the strip)
+    ctx.fillStyle = '#0d7a34';
+    ctx.fillText(zh ? '完美' : '★', lx(pMid - PH, pMid + PH), ly(pMid - PH, pMid + PH) - lw * 0.8);
 
     // Instruction
-    ctx.font = '700 15px ' + UI_FONT; ctx.fillStyle = '#ffd84d';
-    ctx.fillText(zh ? '按 [空格] 或点击 停止判定！' : 'Press [Space] or click to judge!', W / 2, barY + barH + 40);
+    ctx.font = '700 14px ' + UI_FONT; ctx.fillStyle = '#ffd84d';
+    ctx.fillText(zh ? '按 [空格] 或点击 停止！' : 'Press [Space] or click to stop!', cx, cy + R * 0.72 + lw);
 
   } else if (mg.phase === 'result') {
-    const pct = Math.max(0, mg.resultTimer / 90);
-
-    // Frozen bar (dim)
-    ctx.globalAlpha = 0.4;
-    ctx.fillStyle = '#2050c0'; ctx.fillRect(barX, barY, barW * 0.40, barH);
-    ctx.fillStyle = '#18883a'; ctx.fillRect(barX + barW * 0.40, barY, barW * 0.35, barH);
-    ctx.fillStyle = '#b82020'; ctx.fillRect(barX + barW * 0.75, barY, barW * 0.25, barH);
-    // Pointer frozen
-    const ptrX = barX + mg.pointer * barW;
-    ctx.fillStyle = '#fff'; ctx.fillRect(ptrX - 4, barY - 10, 8, barH + 20);
-    ctx.globalAlpha = 1;
-
     // Particles
     ctx.save();
-    for (const p of mg.particles) {
-      if (p.life <= 0) continue;
-      ctx.globalAlpha = Math.max(0, p.life * 0.9);
-      ctx.fillStyle = p.color;
-      ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(0.5, p.size * (mg.zone === 'perfect' ? p.life : 1)), 0, Math.PI * 2); ctx.fill();
+    for (const pp of mg.particles) {
+      if (pp.life <= 0) continue;
+      ctx.globalAlpha = Math.max(0, pp.life * 0.9);
+      ctx.fillStyle = pp.color;
+      const shrink = mg.zone === 'perfect' || mg.zone === 'legendary';
+      ctx.beginPath(); ctx.arc(pp.x, pp.y, Math.max(0.5, pp.size * (shrink ? pp.life : 1)), 0, Math.PI * 2); ctx.fill();
     }
     ctx.restore();
 
-    // Result headline
-    const headline = mg.zone === 'perfect'
-      ? (zh ? '🎉 完美烹饪！' : '🎉 Perfect!')
-      : mg.zone === 'burnt'
-      ? (zh ? '💨 焦糊了...' : '💨 Burnt...')
-      : (zh ? '✓ 普通烹饪' : '✓ Cooked');
-    const hColor = mg.zone === 'perfect' ? '#ffd84d' : mg.zone === 'burnt' ? '#888' : '#90e090';
-    ctx.font = 'bold 30px ' + UI_FONT; ctx.fillStyle = hColor;
-    ctx.fillText(headline, W / 2, H * 0.36);
+    // Result: quality-prefixed dish name + colour per zone
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    if (mg.zone === 'fail') {
+      ctx.font = 'bold 26px ' + UI_FONT; ctx.fillStyle = '#cc4444';
+      ctx.fillText(zh ? '❌ 烹饪失败！' : '❌ Cooking Failed!', cx, H * 0.34);
+      ctx.font = '14px ' + UI_FONT; ctx.fillStyle = 'rgba(200,200,200,0.6)';
+      ctx.fillText(zh ? '食材已消耗' : 'Ingredients consumed', cx, H * 0.43);
+    } else {
+      const qn     = cookQualityName(mg.zone, mg.recipe, zh);
+      const hColor = mg.zone === 'legendary'    ? '#ff3030'
+                   : mg.zone === 'perfect'      ? '#ffd84d'
+                   : mg.zone === 'undercooked'  ? '#90c8f0'
+                   : mg.zone === 'slight_burnt' ? '#e08030'
+                   :                              '#70e890';
+      const prefix = mg.zone === 'legendary' ? '🌟 ' : mg.zone === 'perfect' ? '🎉 ' : '';
+      ctx.font = 'bold 22px ' + UI_FONT; ctx.fillStyle = hColor;
+      ctx.fillText(prefix + qn, cx, H * 0.34);
+      ctx.font = '600 18px ' + UI_FONT; ctx.fillStyle = '#fff';
+      ctx.fillText(`${mg.recipe.icon}${mg.qty > 1 ? ` ×${mg.qty}` : ''}`, cx, H * 0.43);
+    }
 
-    // Output quantity
-    const outQty = mg.zone === 'perfect' ? Math.ceil(mg.qty * 1.5) : mg.zone === 'burnt' ? Math.max(1, Math.floor(mg.qty * 0.5)) : mg.qty;
-    ctx.font = '600 20px ' + UI_FONT; ctx.fillStyle = '#fff';
-    ctx.fillText(`${mg.recipe.icon} ×${outQty}`, W / 2, H * 0.44);
-
-    // Countdown dots
-    const dots = Math.ceil(pct * 3);
+    const dots = Math.ceil(Math.max(0, mg.resultTimer / 90) * 3);
     ctx.font = '13px ' + UI_FONT; ctx.fillStyle = 'rgba(255,255,255,0.3)';
-    ctx.fillText('●'.repeat(dots) + '○'.repeat(3 - dots), W / 2, H * 0.62);
+    ctx.fillText('●'.repeat(dots) + '○'.repeat(3 - dots), cx, H * 0.62);
   }
 }
 
@@ -3668,44 +3814,56 @@ function openCookUI() {
   // Sort: cookable first
   const sorted = [...RECIPES].sort((a, b) => (canCook(b) ? 1 : 0) - (canCook(a) ? 1 : 0));
   sorted.forEach(recipe => {
-    const maxQ = maxCookable(recipe);
-    let qty = Math.min(1, maxQ);
+    let qty = 1;
 
+    // ── Card root ──────────────────────────────────────────────────────────────
     const row = document.createElement('div');
     row.className = 'recipe-row';
 
+    // ── Header row: icon · name · (qty stepper + cook btn) ───────────────────
+    const hdr    = document.createElement('div');  hdr.className = 'rr-header';
     const iconEl = document.createElement('span'); iconEl.className = 'rr-icon'; iconEl.textContent = recipe.icon;
-    const info   = document.createElement('div');  info.className = 'rr-info';
-    const nameEl = document.createElement('div');  nameEl.className = 'rr-name'; nameEl.textContent = t(recipe.key);
-    const chips  = document.createElement('div');  chips.className = 'rr-needs';
-    info.append(nameEl, chips);
+    const nameEl = document.createElement('span'); nameEl.className = 'rr-name'; nameEl.textContent = t(recipe.key);
 
+    const acts   = document.createElement('div');  acts.className = 'rr-acts';
     const qRow   = document.createElement('div');  qRow.className = 'qty-row';
     const qMinus = document.createElement('button'); qMinus.textContent = '−';
     const qNum   = document.createElement('span');  qNum.className = 'qty-num';
     const qPlus  = document.createElement('button'); qPlus.textContent = '+';
     qRow.append(qMinus, qNum, qPlus);
-    if (!maxQ) qRow.style.display = 'none';
 
-    const cookBtn = document.createElement('button');
-    row.append(iconEl, info, qRow, cookBtn);
+    const cookBtn = document.createElement('button'); cookBtn.className = 'rr-cook';
+    acts.append(qRow, cookBtn);
+    hdr.append(iconEl, nameEl, acts);
+
+    // ── Chips row: one chip per ingredient ────────────────────────────────────
+    const chips = document.createElement('div'); chips.className = 'rr-needs';
+
+    row.append(hdr, chips);
     cookRecipeEl.appendChild(row);
 
+    // ── refresh: recompute chip colors, qty limits, button state ──────────────
     const refresh = () => {
-      chips.innerHTML = '';
-      Object.entries(recipe.needs).forEach(([k, n]) => {
-        const have = inventory[k] || 0, need = n * qty;
-        const meta = INVENTORY_META.find(m => m.key === k);
-        const chip = document.createElement('span');
-        chip.className = `rr-chip ${have >= need ? 'ok' : 'bad'}`;
-        chip.textContent = `${meta ? meta.icon : ''} ${t(k) || k} ${have}/${need}`;
-        chips.appendChild(chip);
-      });
+      // BUG FIX: compute maxCookable FIRST so qty is correct before chip rendering
       const cur = maxCookable(recipe);
       qty = Math.max(1, Math.min(qty, cur || 1));
-      qNum.textContent = qty;
-      qMinus.disabled  = qty <= 1;
-      qPlus.disabled   = qty >= Math.max(1, cur);
+
+      chips.innerHTML = '';
+      Object.entries(recipe.needs).forEach(([k, n]) => {
+        const have = inventory[k] || 0;
+        const need = n * qty;   // needed for selected qty (qty ≥ 1 now)
+        const meta = INVENTORY_META.find(m => m.key === k);
+        const chip = document.createElement('span');
+        // 'ok' only when they genuinely have enough; 'bad' otherwise (including 0)
+        chip.className = `rr-chip ${have >= need ? 'ok' : 'bad'}`;
+        chip.textContent = `${meta ? meta.icon : ''} ${t(k) || k} ${have}/${n}`;
+        chips.appendChild(chip);
+      });
+
+      qRow.style.display  = cur < 1 ? 'none' : '';
+      qNum.textContent    = qty;
+      qMinus.disabled     = qty <= 1;
+      qPlus.disabled      = qty >= Math.max(1, cur);
       cookBtn.textContent = t('cook');
       cookBtn.disabled    = cur < 1;
     };
