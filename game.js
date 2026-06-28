@@ -118,6 +118,37 @@ const ACHIEVEMENTS = [
   // ── Cooking
   { id: 'first_cook',  icon: '🍳', nameZh: '初学厨师',       nameEn: 'Budding Chef',
     descZh: '第一次烹饪一顿餐食',  descEn: 'Cook a dish for the first time', target: 1, track: 'cook' },
+  // ── Fisherman (钓鱼佬) ──────────────────────────────────────────────────────
+  // Grass Carp
+  { id: 'fc_gc_3',  icon: '🐟', section: 'fisherman',
+    nameZh: '草鱼·Ⅰ',  nameEn: 'Grass Carp I',
+    descZh: '钓到3条草鱼',   descEn: 'Catch 3 Grass Carp',   target: 3,  track: 'fish_grass_carp', reward: { diamond: 5  } },
+  { id: 'fc_gc_6',  icon: '🐟', section: 'fisherman',
+    nameZh: '草鱼·Ⅱ',  nameEn: 'Grass Carp II',
+    descZh: '钓到6条草鱼',   descEn: 'Catch 6 Grass Carp',   target: 6,  track: 'fish_grass_carp', reward: { diamond: 10 } },
+  { id: 'fc_gc_10', icon: '🐟', section: 'fisherman',
+    nameZh: '草鱼·Ⅲ',  nameEn: 'Grass Carp III',
+    descZh: '钓到10条草鱼',  descEn: 'Catch 10 Grass Carp',  target: 10, track: 'fish_grass_carp', reward: { diamond: 20 } },
+  // Red Carp
+  { id: 'fc_rc_3',  icon: '🐠', section: 'fisherman',
+    nameZh: '红鲤鱼·Ⅰ', nameEn: 'Red Carp I',
+    descZh: '钓到3条红鲤鱼', descEn: 'Catch 3 Red Carp',     target: 3,  track: 'fish_red_carp',   reward: { diamond: 5  } },
+  { id: 'fc_rc_6',  icon: '🐠', section: 'fisherman',
+    nameZh: '红鲤鱼·Ⅱ', nameEn: 'Red Carp II',
+    descZh: '钓到6条红鲤鱼', descEn: 'Catch 6 Red Carp',     target: 6,  track: 'fish_red_carp',   reward: { diamond: 10 } },
+  { id: 'fc_rc_10', icon: '🐠', section: 'fisherman',
+    nameZh: '红鲤鱼·Ⅲ', nameEn: 'Red Carp III',
+    descZh: '钓到10条红鲤鱼',descEn: 'Catch 10 Red Carp',    target: 10, track: 'fish_red_carp',   reward: { diamond: 20 } },
+  // Goldfish
+  { id: 'fc_gf_3',  icon: '🐡', section: 'fisherman',
+    nameZh: '金鱼·Ⅰ',   nameEn: 'Goldfish I',
+    descZh: '钓到3条金鱼',   descEn: 'Catch 3 Goldfish',     target: 3,  track: 'fish_goldfish',   reward: { diamond: 5  } },
+  { id: 'fc_gf_6',  icon: '🐡', section: 'fisherman',
+    nameZh: '金鱼·Ⅱ',   nameEn: 'Goldfish II',
+    descZh: '钓到6条金鱼',   descEn: 'Catch 6 Goldfish',     target: 6,  track: 'fish_goldfish',   reward: { diamond: 10 } },
+  { id: 'fc_gf_10', icon: '🐡', section: 'fisherman',
+    nameZh: '金鱼·Ⅲ',   nameEn: 'Goldfish III',
+    descZh: '钓到10条金鱼',  descEn: 'Catch 10 Goldfish',    target: 10, track: 'fish_goldfish',   reward: { diamond: 20 } },
 ];
 
 let achProgress = {};  // track → count
@@ -600,9 +631,23 @@ const PARTICLE_POOL = Array.from({ length: 10 }, () =>
 
 // ── Fishing system ────────────────────────────────────────────────────────────
 const FISH_TYPES = [
-  { key: 'grass_carp', nameZh: '草鱼',  nameEn: 'Grass Carp', prob: 0.50, decay: 8,  boost: 15, hold: 3 },
-  { key: 'red_carp',   nameZh: '红鲤鱼', nameEn: 'Red Carp',   prob: 0.85, decay: 12, boost: 12, hold: 4 },
-  { key: 'goldfish',   nameZh: '金鱼',   nameEn: 'Goldfish',   prob: 1.00, decay: 20, boost: 8,  hold: 6 },
+  // slideSpeed: auto-left per second   jumpDist: space-right jump   hold: cumulative seconds needed
+  // zoneWidthMin/Max: dynamic width range   zoneWidthChangeSpeed: lerp speed
+  // zoneSpeedMax: max zone center speed (units/s)
+  // zonePauseMin/Max: random pause duration between direction changes (0 = no pause)
+  // zoneJumpEvery: avg seconds between right→left jumps (0 = no jumps)
+  { key: 'grass_carp', nameZh: '草鱼',  nameEn: 'Grass Carp', prob: 0.50,
+    slideSpeed: 0.07, jumpDist: 0.044, hold: 3,
+    zoneWidthMin: 0.15, zoneWidthMax: 0.25, zoneWidthChangeSpeed: 0.15,
+    zoneSpeedMax: 0.06, zonePauseMin: 0.5, zonePauseMax: 1.5, zoneJumpEvery: 0 },
+  { key: 'red_carp',   nameZh: '红鲤鱼', nameEn: 'Red Carp',   prob: 0.85,
+    slideSpeed: 0.13, jumpDist: 0.040, hold: 4,
+    zoneWidthMin: 0.12, zoneWidthMax: 0.22, zoneWidthChangeSpeed: 0.40,
+    zoneSpeedMax: 0.20, zonePauseMin: 0.1, zonePauseMax: 0.6, zoneJumpEvery: 6.5 },
+  { key: 'goldfish',   nameZh: '金鱼',   nameEn: 'Goldfish',   prob: 1.00,
+    slideSpeed: 0.20, jumpDist: 0.035, hold: 6,
+    zoneWidthMin: 0.08, zoneWidthMax: 0.18, zoneWidthChangeSpeed: 0.80,
+    zoneSpeedMax: 0.45, zonePauseMin: 0,   zonePauseMax: 0.05, zoneJumpEvery: 4.0 },
 ];
 const fishingSpots = [];
 let fishingOpen = false;
@@ -2307,7 +2352,7 @@ function openFishing() {
     phase: 'cast',
     lineLen: 0, lineLenTarget: H * 0.42,
     waitTimer: 0, biteAnim: 0, fish: null,
-    tension: 70, holdTimer: 0,
+    sliderPos: 0.40, sliderTarget: null, zoneCenter: 0.5, zoneWidthCur: 0.20, holdTimer: 0,
     result: null, resultTimer: 0,
     swimFish: Array.from({ length: 4 }, () => ({
       x: Math.random() * W, y: H * 0.35 + Math.random() * H * 0.42,
@@ -2329,12 +2374,25 @@ function handleFishingSpace() {
     fishing.phase = 'wait'; fishing.lineLen = 0;
     fishing.waitTimer = 120 + Math.floor(Math.random() * 180);
   } else if (fishing.phase === 'pull') {
-    fishing.tension = Math.min(100, fishing.tension + fishing.fish.boost);
+    // Space sets a rightward target; jumps can stack if pressed repeatedly
+    const base = (fishing.sliderTarget != null ? fishing.sliderTarget : fishing.sliderPos);
+    fishing.sliderTarget = Math.min(1, base + fishing.fish.jumpDist);
   } else if (fishing.phase === 'result') {
     if (Date.now() - (fishing.resultAt || 0) < 2000) return; // 2-second cooldown
     fishing.phase = 'cast';
     fishing.lineLen = 0; fishing.fish = null;
-    fishing.tension = 70; fishing.holdTimer = 0;
+    fishing.sliderPos = 0.40; fishing.sliderTarget = null;
+    fishing.zoneCenter = 0.5;
+    fishing.zoneVel = 0; fishing.zonePause = 0; fishing.zoneDirTimer = 0.5;
+    fishing.zoneJumpTgt = null;
+    const _rfw = fishing.fish;
+    if (_rfw) {
+      fishing.zoneWidthCur = (_rfw.zoneWidthMin + _rfw.zoneWidthMax) / 2;
+      fishing.zoneWidthTgt = fishing.zoneWidthCur;
+      fishing.zoneWidthTimer = 1.0 + Math.random() * 1.5;
+      fishing.zoneJumpTimer = _rfw.zoneJumpEvery > 0 ? _rfw.zoneJumpEvery * (0.6 + Math.random() * 0.8) : Infinity;
+    }
+    fishing.holdTimer = 0; fishing.escapeTimer = 0;
     fishing.result = null; fishing.resultTimer = 0; fishing.resultAt = 0;
   }
 }
@@ -2360,19 +2418,124 @@ function updateFishing() {
     }
   } else if (f.phase === 'bite') {
     if (f.lineLen < f.lineLenTarget) f.lineLen = Math.min(f.lineLenTarget, f.lineLen + 6);
-    if (--f.biteAnim <= 0) { f.phase = 'pull'; f.tension = 70; f.holdTimer = 0; }
+    if (--f.biteAnim <= 0) {
+      f.phase = 'pull';
+      f.sliderPos = 0.40; f.sliderTarget = null;
+      f.zoneCenter = 0.5;
+      // Zone movement state
+      const _fw = f.fish;
+      f.zoneWidthCur = (_fw.zoneWidthMin + _fw.zoneWidthMax) / 2;
+      f.zoneWidthTgt = f.zoneWidthCur;
+      f.zoneWidthTimer = 1.0 + Math.random() * 1.5;
+      f.zoneVel = 0;
+      f.zonePause = 0;
+      f.zoneDirTimer = 0.4 + Math.random() * 0.8;
+      f.zoneJumpTimer = _fw.zoneJumpEvery > 0 ? _fw.zoneJumpEvery * (0.6 + Math.random() * 0.8) : Infinity;
+      f.zoneJumpTgt = null;
+      f.holdTimer = 0; f.escapeTimer = 0;
+    }
   } else if (f.phase === 'pull') {
-    f.tension -= f.fish.decay / 60;
-    if (f.tension <= 0) { f.tension = 0; f.phase = 'result'; f.result = 'fail'; f.resultTimer = 180; f.resultAt = Date.now(); }
-    if (f.tension >= 60) {
-      f.holdTimer += 1 / 60;
-      if (f.holdTimer >= f.fish.hold) {
-        f.phase = 'result'; f.result = 'success'; f.resultTimer = 0; f.resultAt = Date.now();
-        inventory[f.fish.key] = (inventory[f.fish.key] || 0) + 1;
-        saveInventory();
-        lootMessage = { text: (settings.language !== 'en' ? f.fish.nameZh : f.fish.nameEn) + ' x1', timer: 200 };
+    const dt = 1 / 60;
+
+    // ── 1. Auto-slide left (fish pulling) ────────────────────────────────────
+    f.sliderPos -= f.fish.slideSpeed * dt;
+
+    // ── 2. Smooth rightward movement toward sliderTarget ─────────────────────
+    //    Net rightward speed = jumpDist / 0.12 so transit ≈ 0.12-0.17s per jump.
+    //    While moving through the zone, that time still counts (handled below).
+    if (f.sliderTarget != null) {
+      const rightSpeed = f.fish.jumpDist / 0.12; // fast enough for ≈0.15s feel
+      f.sliderPos = Math.min(f.sliderTarget, f.sliderPos + rightSpeed * dt);
+      if (f.sliderPos >= f.sliderTarget) f.sliderTarget = null;
+    }
+
+    // ── 3. Zone dynamics (random walk + dynamic width + right→left jumps) ────
+    const fw = f.fish;
+
+    // 3a. Dynamic width: lerp toward random target, change target when timer expires
+    f.zoneWidthTimer -= dt;
+    if (f.zoneWidthTimer <= 0) {
+      f.zoneWidthTgt = fw.zoneWidthMin + Math.random() * (fw.zoneWidthMax - fw.zoneWidthMin);
+      f.zoneWidthTimer = (0.8 + Math.random() * 2.2) / (fw.zoneWidthChangeSpeed + 0.05);
+    }
+    f.zoneWidthCur += (f.zoneWidthTgt - f.zoneWidthCur) * Math.min(1, fw.zoneWidthChangeSpeed * dt * 2.5);
+    const hz = Math.max(0.04, f.zoneWidthCur / 2);
+
+    // 3b. Jump animation: zone slides quickly to left target (~0.1s)
+    if (f.zoneJumpTgt != null) {
+      const step = 8 * dt; // ~0.1s to cross most of bar
+      if (Math.abs(f.zoneCenter - f.zoneJumpTgt) <= step) {
+        f.zoneCenter = f.zoneJumpTgt;
+        f.zoneJumpTgt = null;
+        f.zoneVel = (Math.random() - 0.5) * fw.zoneSpeedMax; // resume with random vel
+      } else {
+        f.zoneCenter -= step; // always moving left during jump
+      }
+    } else {
+      // 3c. Random walk with direction changes and optional pauses
+      if (f.zonePause > 0) {
+        f.zonePause -= dt;
+        f.zoneVel *= Math.pow(0.02, dt); // decelerate quickly during pause
+      } else {
+        f.zoneDirTimer -= dt;
+        if (f.zoneDirTimer <= 0) {
+          f.zoneVel = (Math.random() * 2 - 1) * fw.zoneSpeedMax;
+          if (fw.zonePauseMax > 0 && Math.random() < 0.4) {
+            f.zonePause = fw.zonePauseMin + Math.random() * (fw.zonePauseMax - fw.zonePauseMin);
+          }
+          // Randomised interval — aperiodic to prevent player prediction
+          f.zoneDirTimer = (0.25 + Math.random() * 1.4) / (fw.zoneSpeedMax * 3 + 0.1);
+        }
+        f.zoneVel = Math.max(-fw.zoneSpeedMax, Math.min(fw.zoneSpeedMax, f.zoneVel));
+      }
+
+      f.zoneCenter += f.zoneVel * dt;
+
+      // Bounce at bar edges (smooth reversal)
+      if (f.zoneCenter - hz < 0)  { f.zoneCenter = hz;     f.zoneVel =  Math.abs(f.zoneVel) * 0.7; }
+      if (f.zoneCenter + hz > 1)  { f.zoneCenter = 1 - hz; f.zoneVel = -Math.abs(f.zoneVel) * 0.7; }
+
+      // Right→left jump trigger (only when zone is in right half, not left→right)
+      if (fw.zoneJumpEvery > 0) {
+        f.zoneJumpTimer -= dt;
+        if (f.zoneJumpTimer <= 0) {
+          if (f.zoneCenter > 0.45) {
+            f.zoneJumpTgt = hz + Math.random() * Math.max(0, 0.35 - hz);
+          }
+          // Highly variable interval to avoid prediction (±60%)
+          f.zoneJumpTimer = fw.zoneJumpEvery * (0.4 + Math.random() * 1.2);
+        }
       }
     }
+
+    f.zoneCenter = Math.max(hz, Math.min(1 - hz, f.zoneCenter));
+
+    // Clamp slider
+    f.sliderPos = Math.max(0, Math.min(1, f.sliderPos));
+
+    // ── 4. Zone check ─────────────────────────────────────────────────────────
+    const zL = f.zoneCenter - hz, zR = f.zoneCenter + hz;
+    const inZone = f.sliderPos >= zL && f.sliderPos <= zR;
+
+    if (inZone) {
+      // In zone: reset escape timer, accumulate hold time
+      f.escapeTimer = 0;
+      f.holdTimer += dt;
+      if (f.holdTimer >= f.fish.hold) {
+        f.phase = 'result'; f.result = 'success'; f.resultAt = Date.now();
+        inventory[f.fish.key] = (inventory[f.fish.key] || 0) + 1;
+        saveInventory();
+        progressAch('fish_' + f.fish.key);
+        lootMessage = { text: (settings.language !== 'en' ? f.fish.nameZh : f.fish.nameEn) + ' x1', timer: 200 };
+      }
+    } else {
+      // Outside zone: accumulate escape timer (5s = fail)
+      f.escapeTimer += dt;
+      if (f.escapeTimer >= 5) {
+        f.phase = 'result'; f.result = 'fail'; f.resultAt = Date.now();
+      }
+    }
+    // holdTimer pauses (but does NOT reset) when outside zone
   } // result phase: only closed by key press, never auto-closed
 }
 
@@ -2450,24 +2613,83 @@ function drawFishingUI() {
     }
 
   } else if (f.phase === 'pull') {
-    const barW = Math.min(370, W * 0.62), barH = 28, barX = (W - barW) / 2, barY = 38;
-    ctx.fillStyle = 'rgba(0,0,0,0.6)'; roundRectPath(ctx, barX - 8, barY - 8, barW + 16, barH + 16, 8); ctx.fill();
-    ctx.fillStyle = '#2050b8'; ctx.fillRect(barX, barY, barW * 0.6, barH);
-    ctx.fillStyle = '#18883a'; ctx.fillRect(barX + barW * 0.6, barY, barW * 0.4, barH);
-    const ptrX = barX + (f.tension / 100) * barW;
-    ctx.fillStyle = '#fff'; ctx.fillRect(ptrX - 3, barY - 5, 6, barH + 10);
-    ctx.fillStyle = '#ffd84d'; ctx.font = '600 12px ' + UI_FONT; ctx.textAlign = 'center';
-    ctx.fillText(zh ? '拉力' : 'Tension', W / 2, barY - 12);
-    if (f.tension >= 60) {
-      ctx.fillStyle = '#50ff80';
-      ctx.fillText(`${f.holdTimer.toFixed(1)}s / ${f.fish.hold}s`, W / 2, barY + barH + 16);
+    const barW = Math.min(460, W * 0.72), barH = 36;
+    const barX = (W - barW) / 2, barY = H * 0.18;
+    const hz = Math.max(0.04, (f.zoneWidthCur ?? (f.fish.zoneWidthMin + f.fish.zoneWidthMax) / 2) / 2);
+    const zL = f.zoneCenter - hz, zR = f.zoneCenter + hz;
+    const inZone = f.sliderPos >= zL && f.sliderPos <= zR;
+
+    // ── Success timer bar (above main bar) ───────────────────────────────────
+    const holdBarW = barW * 0.55, holdBarH = 10;
+    const holdBarX = (W - holdBarW) / 2, holdBarY = barY - holdBarH - 14;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; roundRectPath(ctx, holdBarX - 4, holdBarY - 4, holdBarW + 8, holdBarH + 8, 5); ctx.fill();
+    ctx.fillStyle = '#182818'; ctx.fillRect(holdBarX, holdBarY, holdBarW, holdBarH);
+    const holdPct = Math.min(1, f.holdTimer / f.fish.hold);
+    ctx.fillStyle = inZone ? '#40d060' : '#258040';
+    ctx.fillRect(holdBarX, holdBarY, holdBarW * holdPct, holdBarH);
+    ctx.fillStyle = '#aaa'; ctx.font = '10px ' + UI_FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(`${f.holdTimer.toFixed(1)} / ${f.fish.hold}s`, W / 2, holdBarY + holdBarH / 2);
+
+    // ── Main slider bar ────────────────────────────────────────────────────────
+    ctx.fillStyle = 'rgba(0,0,0,0.65)'; roundRectPath(ctx, barX - 8, barY - 8, barW + 16, barH + 16, 10); ctx.fill();
+    // Background track
+    ctx.fillStyle = '#1a1a28'; ctx.fillRect(barX, barY, barW, barH);
+
+    // Green zone (with subtle inner glow when slider is inside)
+    const gzX = barX + zL * barW, gzW = (zR - zL) * barW;
+    ctx.fillStyle = inZone ? 'rgba(50,200,90,0.45)' : 'rgba(40,160,70,0.32)';
+    ctx.fillRect(gzX, barY, gzW, barH);
+    ctx.strokeStyle = inZone ? '#60ff80' : '#30a050';
+    ctx.lineWidth = inZone ? 2.5 : 1.5;
+    ctx.strokeRect(gzX, barY, gzW, barH);
+
+    // Zone center tick (visual aid)
+    ctx.fillStyle = 'rgba(80,255,120,0.25)';
+    ctx.fillRect(barX + f.zoneCenter * barW - 1, barY, 2, barH);
+
+    // Slider knob
+    const sX = barX + f.sliderPos * barW;
+    ctx.fillStyle = inZone ? '#80ffaa' : '#fff';
+    ctx.fillRect(sX - 5, barY - 6, 10, barH + 12);
+    ctx.fillStyle = '#111';
+    ctx.fillRect(sX - 1.5, barY - 4, 3, barH + 8);
+
+    // Bar label
+    ctx.fillStyle = '#ffd84d'; ctx.font = '600 11px ' + UI_FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(zh ? '←  鱼在挣脱  [空格]→' : '← Fish pulling   [Space]→', W / 2, barY + barH + 16);
+
+    // ── Escape timer bar (below main bar — fills red as fish escapes) ─────────
+    const escT = f.escapeTimer || 0;
+    if (!inZone && escT > 0) {
+      const escBarW = barW * 0.5, escBarH = 6;
+      const escBarX = (W - escBarW) / 2, escBarY = barY + barH + 28;
+      ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(escBarX - 3, escBarY - 3, escBarW + 6, escBarH + 6);
+      ctx.fillStyle = '#2a1010'; ctx.fillRect(escBarX, escBarY, escBarW, escBarH);
+      const urgency = escT / 5; // 0→1 over 5 seconds
+      ctx.fillStyle = urgency > 0.6 ? '#ff3030' : '#d06020';
+      ctx.fillRect(escBarX, escBarY, escBarW * urgency, escBarH);
+      ctx.fillStyle = urgency > 0.6 ? '#ff8080' : '#aaa'; ctx.font = '10px ' + UI_FONT;
+      ctx.fillText(
+        zh ? `⚠ 脱钩 ${(5 - escT).toFixed(1)}s` : `⚠ Escaping ${(5 - escT).toFixed(1)}s`,
+        W / 2, escBarY + escBarH + 11
+      );
     }
-    const shakeX = Math.sin(tick * 0.4) * 6;
-    ctx.save(); ctx.globalAlpha = 0.95; drawFishSprite(ctx, FISH_TYPES.indexOf(f.fish), W / 2 + shakeX, H * 0.54, 28); ctx.restore();
-    ctx.strokeStyle = 'rgba(200,210,220,0.6)'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(rodTipX, rodTipY); ctx.lineTo(W / 2 + shakeX, H * 0.54 - 24); ctx.stroke();
-    ctx.fillStyle = '#ffd84d'; ctx.font = '700 16px ' + UI_FONT; ctx.textAlign = 'center';
-    ctx.fillText(zh ? '按 [空格] 拉鱼！' : 'Press [Space] to reel in!', W / 2, H - 48);
+
+    // ── Fish sprite in water (struggling shake) ───────────────────────────────
+    const shakeX = Math.sin(tick * 0.5) * (inZone ? 3 : 8);
+    const fishY  = H * 0.58;
+    ctx.save(); ctx.globalAlpha = 0.95;
+    drawFishSprite(ctx, FISH_TYPES.indexOf(f.fish), W / 2 + shakeX, fishY, 30);
+    ctx.restore();
+    // Line from rod to fish
+    ctx.strokeStyle = 'rgba(200,210,220,0.55)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(rodTipX, rodTipY); ctx.lineTo(W / 2 + shakeX, fishY - 26); ctx.stroke();
+
+    // In-zone indicator text
+    if (inZone) {
+      ctx.fillStyle = '#60ff90'; ctx.font = '600 13px ' + UI_FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(zh ? '✓ 保持住！' : '✓ Hold it!', W / 2, H * 0.74);
+    }
 
   } else if (f.phase === 'result') {
     ctx.textAlign = 'center';
@@ -3913,43 +4135,43 @@ function openAchUI() {
   const list = document.getElementById('achList');
   list.innerHTML = '';
 
-  // Sort: unlocked first
-  const sorted = [...ACHIEVEMENTS].sort((a, b) => (achUnlocked[b.id] ? 1 : 0) - (achUnlocked[a.id] ? 1 : 0));
-  sorted.forEach(a => {
-    const done  = !!achUnlocked[a.id];
-    const prog  = Math.min(achProgress[a.track] || 0, a.target);
-    const pct   = Math.round(prog / a.target * 100);
-
-    const row = document.createElement('div');
-    row.className = 'ach-row';
-
+  // Helper: render one achievement row
+  function renderAchRow(a) {
+    const done = !!achUnlocked[a.id];
+    const prog = Math.min(achProgress[a.track] || 0, a.target);
+    const pct  = Math.round(prog / a.target * 100);
+    const row  = document.createElement('div'); row.className = 'ach-row';
     const icon = document.createElement('div');
     icon.className = `ach-icon${done ? ' done' : ''}`;
     icon.textContent = done ? a.icon : '🔒';
+    const info = document.createElement('div'); info.className = 'ach-info';
+    info.innerHTML =
+      `<div class="ach-name ${done ? 'done' : 'locked'}">${zh ? a.nameZh : a.nameEn}</div>
+       <div class="ach-desc">${zh ? a.descZh : a.descEn}</div>
+       ${!done ? `<div class="ach-bar-wrap"><div class="ach-bar" style="width:${pct}%"></div></div>
+       <div class="ach-progress">${prog} / ${a.target}</div>` : ''}`;
+    const stamp = document.createElement('div'); stamp.className = 'ach-done-stamp';
+    if (done) { stamp.textContent = zh ? '✓ 完成' : '✓ Done'; }
+    else if (a.reward?.diamond) { stamp.textContent = `💎×${a.reward.diamond}`; stamp.style.color = '#88aaff'; stamp.style.fontSize = '12px'; }
+    row.append(icon, info, stamp); list.appendChild(row);
+  }
 
-    const info = document.createElement('div');
-    info.className = 'ach-info';
-    info.innerHTML = `
-      <div class="ach-name ${done ? 'done' : 'locked'}">${zh ? a.nameZh : a.nameEn}</div>
-      <div class="ach-desc">${zh ? a.descZh : a.descEn}</div>
-      ${!done ? `
-        <div class="ach-bar-wrap"><div class="ach-bar" style="width:${pct}%"></div></div>
-        <div class="ach-progress">${prog} / ${a.target}</div>
-      ` : ''}`;
+  // Group achievements by section (undefined/missing = 'general')
+  const general    = ACHIEVEMENTS.filter(a => !a.section);
+  const fisherman  = ACHIEVEMENTS.filter(a => a.section === 'fisherman');
 
-    const stamp = document.createElement('div');
-    stamp.className = 'ach-done-stamp';
-    if (done) {
-      stamp.textContent = zh ? '✓ 完成' : '✓ Done';
-    } else if (a.reward?.diamond) {
-      stamp.textContent = `💎×${a.reward.diamond}`;
-      stamp.style.color = '#88aaff';
-      stamp.style.fontSize = '12px';
-    }
+  // General section (chest + cooking) — sorted: done first
+  [...general].sort((a, b) => (achUnlocked[b.id] ? 1 : 0) - (achUnlocked[a.id] ? 1 : 0))
+    .forEach(renderAchRow);
 
-    row.append(icon, info, stamp);
-    list.appendChild(row);
-  });
+  // Fisherman section with header
+  if (fisherman.length) {
+    const hdr = document.createElement('div'); hdr.className = 'ach-section-hdr';
+    hdr.textContent = zh ? '🎣 钓鱼佬' : '🎣 Fisherman';
+    list.appendChild(hdr);
+    [...fisherman].sort((a, b) => (achUnlocked[b.id] ? 1 : 0) - (achUnlocked[a.id] ? 1 : 0))
+      .forEach(renderAchRow);
+  }
 
   achModal.classList.remove('hidden');
 }
@@ -3978,15 +4200,13 @@ function buildBagSection(gridEl, keys) {
       `<span class="bc-icon">${meta.icon}</span>` +
       `<span class="bc-count">${n}</span>` +
       `<span class="bc-name">${t(key) || key}</span>`;
-    // Tag fish chips so the right-click slaughter handler can find them
-    if (BAG_FISH_KEYS.includes(key)) {
-      chip.dataset.fish = key;
-      chip.title = t('slaughterHint');
-      chip.style.cursor = 'context-menu';
-    }
-    // Drift bottle: clickable to open and reveal message
+    // All chips: right-click opens the discard/action context menu
+    chip.style.cursor = 'context-menu';
+    chip.addEventListener('contextmenu', e => openBagCtxMenu(e, key));
+    // Fish chips keep their data-fish tag (used by context menu slaughter logic)
+    if (BAG_FISH_KEYS.includes(key)) chip.dataset.fish = key;
+    // Drift bottle: left-click to open and reveal message
     if (key === 'driftBottle') {
-      chip.style.cursor = 'pointer';
       chip.style.border = '1px solid rgba(255,216,77,0.5)';
       chip.title = driftBottleOpened ? t('driftMsgTitle') : '点击打开 / Click to open';
       chip.addEventListener('click', () => openDriftBottle());
@@ -4015,17 +4235,6 @@ function openBagUI() {
   buildBagSection(document.getElementById('bagIngGrid'),  BAG_INGREDIENT_KEYS);
   buildBagSection(document.getElementById('bagFoodGrid'), BAG_FOOD_KEYS);
   buildBagSection(document.getElementById('bagMatGrid'),  BAG_MATERIAL_KEYS);
-  // Right-click fish chips → slaughter
-  document.getElementById('bagFishGrid').querySelectorAll('.bag-chip[data-fish]').forEach(chip => {
-    chip.addEventListener('contextmenu', e => {
-      e.preventDefault();
-      const k = chip.dataset.fish;
-      if (!inventory[k] || inventory[k] <= 0) return;
-      inventory[k]--; inventory.fish_meat = (inventory.fish_meat || 0) + 1;
-      saveInventory(); openBagUI();
-      showNotif(t('slaughterDone'));
-    });
-  });
   bagModal.classList.remove('hidden');
 }
 function closeBagUI() { bagOpen = false; bagModal.classList.add('hidden'); }
@@ -4033,6 +4242,107 @@ function closeBagUI() { bagOpen = false; bagModal.classList.add('hidden'); }
 bagBtn.addEventListener('click', openBagUI);
 bagCloseBtn.addEventListener('click', closeBagUI);
 bagModal.addEventListener('click', e => { if (e.target === bagModal) closeBagUI(); });
+
+// ── Bag right-click context menu ──────────────────────────────────────────────
+let _bagCtxMenu = null;
+
+function _initBagCtxMenu() {
+  if (_bagCtxMenu) return;
+  _bagCtxMenu = document.createElement('div');
+  _bagCtxMenu.id = 'bagContextMenu';
+  _bagCtxMenu.className = 'hidden';
+  document.body.appendChild(_bagCtxMenu);
+  // Close when clicking outside (capture phase — fires before any other handler)
+  document.addEventListener('click', e => {
+    if (_bagCtxMenu && !_bagCtxMenu.classList.contains('hidden') && !_bagCtxMenu.contains(e.target))
+      _bagCtxMenu.classList.add('hidden');
+  }, true);
+  // Close on Escape without propagating to game handlers
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && _bagCtxMenu && !_bagCtxMenu.classList.contains('hidden')) {
+      _bagCtxMenu.classList.add('hidden'); e.stopPropagation();
+    }
+  }, true);
+}
+
+function openBagCtxMenu(e, key) {
+  _initBagCtxMenu();
+  e.preventDefault(); e.stopPropagation();
+  const zh  = settings.language !== 'en';
+  const n   = inventory[key] || 0;
+  if (n <= 0) return;
+  const meta    = INVENTORY_META.find(m => m.key === key);
+  const name    = t(key) || key;
+  const isFish  = BAG_FISH_KEYS.includes(key);
+
+  _bagCtxMenu.innerHTML =
+    `<div class="bcm-header">
+       <span class="bcm-icon">${meta ? meta.icon : ''}</span>
+       <span class="bcm-name">${name}</span>
+       <span class="bcm-stock">×${n}</span>
+     </div>
+     <div class="bcm-qty-row">
+       <label class="bcm-label">${zh ? '数量：' : 'Qty:'}</label>
+       <input type="number" class="bcm-qty" min="1" max="${n}" value="${n}" />
+     </div>
+     <button class="bcm-btn bcm-do-discard">${zh ? '🗑 丢弃' : '🗑 Discard'}</button>
+     <button class="bcm-btn bcm-do-all">${zh ? `🗑 全部丢弃（×${n}）` : `🗑 Discard All (×${n})`}</button>
+     ${isFish ? `<button class="bcm-btn bcm-do-slaughter">🍣 ${zh ? '宰杀 → 鱼肉' : 'Slaughter → Fish Meat'}</button>` : ''}
+     <button class="bcm-btn bcm-do-cancel">${zh ? '取消' : 'Cancel'}</button>`;
+
+  // Measure then position near cursor
+  _bagCtxMenu.style.left = '-9999px'; _bagCtxMenu.style.top = '-9999px';
+  _bagCtxMenu.classList.remove('hidden');
+  const mw = _bagCtxMenu.offsetWidth, mh = _bagCtxMenu.offsetHeight;
+  let x = e.clientX + 6, y = e.clientY + 6;
+  if (x + mw > window.innerWidth  - 8) x = e.clientX - mw - 4;
+  if (y + mh > window.innerHeight - 8) y = e.clientY - mh - 4;
+  _bagCtxMenu.style.left = Math.max(4, x) + 'px';
+  _bagCtxMenu.style.top  = Math.max(4, y) + 'px';
+
+  const qtyEl = _bagCtxMenu.querySelector('.bcm-qty');
+  // Clamp qty to actual stock on every keystroke
+  qtyEl.addEventListener('input', () => {
+    let v = parseInt(qtyEl.value) || 1;
+    qtyEl.value = Math.max(1, Math.min(v, inventory[key] || 1));
+  });
+  setTimeout(() => { qtyEl.focus(); qtyEl.select(); }, 10);
+
+  function getQty() { return Math.min(Math.max(1, parseInt(qtyEl.value) || 1), inventory[key] || 0); }
+  function close()  { _bagCtxMenu.classList.add('hidden'); }
+
+  // Discard selected qty (with confirm)
+  _bagCtxMenu.querySelector('.bcm-do-discard').addEventListener('click', () => {
+    const qty = getQty();
+    if (!confirm(zh ? `确定丢弃 ${name} ×${qty}？` : `Discard ${qty}× ${name}?`)) return;
+    inventory[key] = Math.max(0, (inventory[key] || 0) - qty);
+    saveInventory(); close(); openBagUI();
+    showNotif(zh ? `🗑 已丢弃 ${name} ×${qty}` : `🗑 Discarded ${name} ×${qty}`);
+  });
+
+  // Discard all (with confirm)
+  _bagCtxMenu.querySelector('.bcm-do-all').addEventListener('click', () => {
+    const qty = inventory[key] || 0;
+    if (!confirm(zh ? `确定丢弃全部 ${name}（×${qty}）？` : `Discard all ${qty}× ${name}?`)) return;
+    inventory[key] = 0;
+    saveInventory(); close(); openBagUI();
+    showNotif(zh ? `🗑 已全部丢弃 ${name}` : `🗑 Discarded all ${name}`);
+  });
+
+  // Slaughter fish → fish meat
+  const slBtn = _bagCtxMenu.querySelector('.bcm-do-slaughter');
+  if (slBtn) {
+    slBtn.addEventListener('click', () => {
+      const qty = getQty();
+      inventory[key] = Math.max(0, (inventory[key] || 0) - qty);
+      inventory.fish_meat = (inventory.fish_meat || 0) + qty;
+      saveInventory(); close(); openBagUI();
+      showNotif(zh ? `🍣 鱼肉 ×${qty}` : `🍣 Fish Meat ×${qty}`);
+    });
+  }
+
+  _bagCtxMenu.querySelector('.bcm-do-cancel').addEventListener('click', close);
+}
 
 // Rebuild inventory editor whenever admin panel opens (called from enableAdmin patch below)
 function refreshAdminInv() {

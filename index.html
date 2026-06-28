@@ -94,6 +94,11 @@
     .ach-bar { height: 100%; border-radius: 2px; background: linear-gradient(90deg, #ffd84d, #ffb020); transition: width .4s; }
     .ach-progress { font-size: 10px; color: #888; margin-top: 3px; }
     .ach-done-stamp { font-size: 11px; color: #ffd84d; font-weight: 600; white-space: nowrap; }
+    .ach-section-hdr {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+      color: #6ab8ff; padding: 10px 22px 6px;
+      border-top: 1px solid rgba(100,180,255,0.2); margin-top: 6px;
+    }
     #achCloseBtn {
       margin: 0 22px 16px; padding: 10px; border: 0; border-radius: 10px;
       cursor: pointer; background: rgba(255,255,255,0.1); color: #f0f0f2;
@@ -331,28 +336,34 @@
     }
     #shopModal.hidden { display: none; }
     #shopPanel {
-      width: 300px; max-width: 92vw;
+      width: 380px; max-width: 92vw;
       background: rgba(24,24,27,0.98); color: #f0f0f2;
       border: 1px solid rgba(255,255,255,0.12); border-radius: 16px;
-      padding: 20px 22px; box-shadow: 0 16px 50px rgba(0,0,0,0.5);
+      padding: 18px 16px; box-shadow: 0 16px 50px rgba(0,0,0,0.5);
     }
     #shopPanel h2 { font-size: 17px; margin-bottom: 6px; color: #ffd84d; font-weight: 600; }
     #shopGold { font-size: 12px; color: #a0a0a6; margin-bottom: 14px; }
     .shop-item {
-      display: flex; align-items: center; gap: 10px;
-      padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,0.07);
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.07);
+      min-width: 0;
     }
     .shop-item:last-of-type { border-bottom: 0; }
-    .shop-item .si-icon { font-size: 22px; flex: 0 0 auto; }
-    .shop-item .si-info { flex: 1 1 auto; }
-    .shop-item .si-name { font-size: 14px; font-weight: 600; }
-    .shop-item .si-price { font-size: 12px; color: #ffd84d; margin-top: 1px; }
-    .shop-item button {
-      padding: 6px 14px; border: 0; border-radius: 8px; cursor: pointer;
-      background: #ffd84d; color: #1a1a1c; font-size: 13px; font-weight: 600;
-      font-family: inherit; flex: 0 0 auto;
+    .shop-item .si-icon { font-size: 20px; flex: 0 0 auto; }
+    /* si-info must be able to shrink so the right-side controls don't overflow */
+    .shop-item .si-info { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+    .shop-item .si-name {
+      font-size: 13px; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .shop-item button:disabled { background: rgba(255,255,255,0.12); color: #666; cursor: default; }
+    .shop-item .si-price { font-size: 11px; color: #ffd84d; margin-top: 1px; }
+    /* Target Buy button by class — avoids overriding the .qty-row −/+ buttons */
+    .shop-item button.si-buy {
+      padding: 5px 10px; border: 0; border-radius: 8px; cursor: pointer;
+      background: #ffd84d; color: #1a1a1c; font-size: 12px; font-weight: 600;
+      font-family: inherit; flex: 0 0 auto; white-space: nowrap;
+    }
+    .shop-item button.si-buy:disabled { background: rgba(255,255,255,0.12); color: #666; cursor: default; }
     #shopCloseBtn {
       width: 100%; margin-top: 14px; padding: 10px; border: 0; border-radius: 9px;
       cursor: pointer; background: rgba(255,255,255,0.12); color: #f0f0f2;
@@ -437,7 +448,47 @@
     .bag-chip .bc-icon { font-size: 18px; }
     .bag-chip .bc-count { font-weight: 600; color: #ffd84d; }
     .bag-chip .bc-name  { font-size: 11px; color: #b0b0b8; }
+    .bag-chip:hover { background: rgba(255,255,255,0.11); }
     .bag-empty { font-size: 13px; color: #666; font-style: italic; }
+
+    /* ── Bag right-click context menu ────────────────────────────── */
+    #bagContextMenu {
+      position: fixed; z-index: 9995;
+      background: rgba(22,22,26,0.98); color: #f0f0f2;
+      border: 1px solid rgba(255,255,255,0.15); border-radius: 12px;
+      padding: 12px 14px; box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+      min-width: 210px;
+      font-family: -apple-system,"SF Pro Display",system-ui,"Segoe UI",Roboto,Arial,sans-serif;
+    }
+    #bagContextMenu.hidden { display: none; }
+    .bcm-header { display: flex; align-items: center; gap: 7px; margin-bottom: 10px; }
+    .bcm-icon   { font-size: 20px; flex: 0 0 auto; }
+    .bcm-name   { font-size: 13px; font-weight: 600; flex: 1 1 auto; }
+    .bcm-stock  { font-size: 12px; color: #ffd84d; flex: 0 0 auto; }
+    .bcm-qty-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .bcm-label  { font-size: 12px; color: #aaa; white-space: nowrap; }
+    .bcm-qty    {
+      flex: 1; background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.18); border-radius: 6px;
+      color: #fff; padding: 4px 8px; font-size: 13px;
+      font-family: inherit; text-align: right; -moz-appearance: textfield;
+    }
+    .bcm-qty:focus { outline: none; border-color: rgba(255,216,77,0.6); }
+    .bcm-qty::-webkit-inner-spin-button { opacity: 1; }
+    .bcm-btn {
+      display: block; width: 100%; padding: 7px 10px;
+      border: 0; border-radius: 8px; cursor: pointer;
+      font-size: 12px; font-weight: 600; font-family: inherit;
+      margin-bottom: 5px; text-align: left;
+    }
+    .bcm-btn:last-child { margin-bottom: 0; }
+    .bcm-do-discard  { background: rgba(200,50,50,0.85); color: #fff; }
+    .bcm-do-discard:hover  { background: rgba(220,65,65,0.95); }
+    .bcm-do-all      { background: rgba(150,35,35,0.75); color: #ddd; }
+    .bcm-do-all:hover      { background: rgba(175,45,45,0.90); }
+    .bcm-do-slaughter { background: rgba(30,140,70,0.85); color: #fff; }
+    .bcm-do-slaughter:hover { background: rgba(40,160,80,0.95); }
+    .bcm-do-cancel   { background: rgba(255,255,255,0.08); color: #999; margin-top: 2px; }
     #bagCloseBtn {
       width: 100%; margin-top: 6px; padding: 10px; border: 0; border-radius: 9px;
       cursor: pointer; background: rgba(255,255,255,0.12); color: #f0f0f2;
