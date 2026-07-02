@@ -269,8 +269,8 @@ const STOVE_COL = 44, STOVE_ROW = 30;
 const BUILDING_TILES = new Set();
 function protectBuilding(col, row) { BUILDING_TILES.add(`${col},${row}`); }
 // ── Stone stele (前 of Washington Monument) ───────────────────────────────────
-const STELE_COL = Math.floor(COLS / 2) + 3; // 3 tiles east of monument center
-const STELE_ROW = 36;                   // 2 tiles south of monument base (row 34)
+let STELE_COL = Math.floor(COLS / 2) + 3; // 3 tiles east of monument center (moveable via admin)
+let STELE_ROW = 36;                      // 2 tiles south of monument base (row 34)
 let   steleOpen = false;
 
 protectBuilding(SHOP_COL,  SHOP_ROW);
@@ -565,6 +565,12 @@ function buildMap() {
     const canon = serverCanon || localCanon;
     if (canon && Array.isArray(canon.map) && canon.map.length === ROWS * COLS) {
       canon.map.forEach((v, i) => { map[Math.floor(i / COLS)][i % COLS] = v; });
+      if (canon.stele && typeof canon.stele.col === 'number') {
+        BUILDING_TILES.delete(`${STELE_COL},${STELE_ROW}`);
+        STELE_COL = canon.stele.col; STELE_ROW = canon.stele.row;
+        BUILDING_TILES.add(`${STELE_COL},${STELE_ROW}`);
+      }
+      map[STELE_ROW][STELE_COL] = T.GRASS; // stele tile must always be walkable grass
       // Restore decorations — keep only 2/5 of flowers/sunflowers (deterministic thinning)
       decorations.length = 0;
       for (const d of (canon.decos || [])) {
@@ -721,7 +727,7 @@ function saveCanonical() {
   const decos = decorations.map(d => ({ col: d.col, row: d.row, type: d.type }));
   const ps = {};
   for (const k in palmOnSand) ps[k] = true;
-  const data = { map: flat, decos, palmOnSand: ps };
+  const data = { map: flat, decos, palmOnSand: ps, stele: { col: STELE_COL, row: STELE_ROW } };
 
   // 1) 本地备份
   try { localStorage.setItem('mapExplorerCanonical', JSON.stringify(data)); } catch (_) {}
@@ -875,7 +881,7 @@ const settings = {
   gender: 'male',     // 'male' | 'female'
   clothes: 0,         // index into CLOTHES
   name: '',
-  language: 'zh',     // 'zh' | 'en'
+  language: 'en',     // 'zh' | 'en'
 };
 
 // Restore saved settings if present
@@ -912,6 +918,7 @@ const I18N = {
     bFlower: '小花', bSunflower: '太阳花',
     bChest: '普通的宝箱', bChestFancy: '精致的宝箱', bChestPrecious: '珍贵的宝箱', bChestSplendid: '华丽的宝箱',
     bDigChest: '地埋·普通', bDigFancy: '地埋·精致', bDigPrecious: '地埋·珍贵', bDigSplendid: '地埋·华丽',
+    bStele: '放置石碑',
     pressShop: '按 F 进入商店',
     shopTitle: '🏪 小商店', shopClose: '关闭', shopGold: (n) => `当前金币：${n} 💰`,
     shopBuy: '购买', shopPrice: (n) => `${n} 金币`,
@@ -969,6 +976,7 @@ const I18N = {
     bFlower: 'Flower', bSunflower: 'Sunflower',
     bChest: 'Common Chest', bChestFancy: 'Exquisite Chest', bChestPrecious: 'Precious Chest', bChestSplendid: 'Luxurious Chest',
     bDigChest: 'Buried Common', bDigFancy: 'Buried Exquisite', bDigPrecious: 'Buried Precious', bDigSplendid: 'Buried Luxurious',
+    bStele: 'Place Stele',
     pressShop: 'Press F to enter shop',
     shopTitle: '🏪 Shop', shopClose: 'Close', shopGold: (n) => `Gold: ${n} 💰`,
     shopBuy: 'Buy', shopPrice: (n) => `${n} Gold`,
@@ -1176,6 +1184,17 @@ function walkAdjacentTo(sc, sr, tc, tr) {
 function paintTile(c, r) {
   if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
   if (monumentBlocked[`${c},${r}`]) return; // monument plinth
+  if (adminBrush === 'stele') {
+    // Move stele to the clicked tile
+    BUILDING_TILES.delete(`${STELE_COL},${STELE_ROW}`);
+    STELE_COL = c; STELE_ROW = r;
+    BUILDING_TILES.add(`${STELE_COL},${STELE_ROW}`);
+    map[STELE_ROW][STELE_COL] = T.GRASS;
+    saveCanonical();
+    renderStaticMap();
+    interactions = buildInteractions();
+    return;
+  }
   if (BUILDING_TILES.has(`${c},${r}`)) return; // all registered buildings
   const k = `${c},${r}`;
   const prev = mapEdits[k] ? normalizeState(mapEdits[k]) : null;
@@ -2232,7 +2251,6 @@ function renderTreeCanvas() {
   drawMonument(tctx);
   drawShopBuilding(tctx);
   drawStoveBuilding(tctx);
-  drawStele(tctx);
 }
 
 function drawShopBuilding(g) {
@@ -3776,6 +3794,7 @@ function draw() {
 
   // ── Tree + monument overlay (on top of player) ────────────────────────────
   ctx.drawImage(treeCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
+  drawStele(ctx); // always draw stele fresh each frame so it can't be buried by map data
 
   // ── Occlusion ghost (gray silhouette shown through trees) ────────────────
   const PAD = 12;
@@ -4073,6 +4092,7 @@ const BRUSHES = [
   { id: 'digFancy',      key: 'bDigFancy',      color: '#6b3d1e' },
   { id: 'digPrecious',   key: 'bDigPrecious',   color: '#6b3d1e' },
   { id: 'digSplendid',   key: 'bDigSplendid',   color: '#6b3d1e' },
+  { id: 'stele',         key: 'bStele',         color: '#4e4e5e' },
 ];
 BRUSHES.forEach(br => {
   const b = document.createElement('button');
@@ -4087,6 +4107,10 @@ BRUSHES.forEach(br => {
   b.addEventListener('click', () => { adminBrush = br.id; refreshBrushUI(); });
   brushList.appendChild(b);
 });
+// Recalculate brush section max-height now that all buttons exist
+const _brushSection = document.getElementById('brushSection');
+if (_brushSection && !_brushSection.classList.contains('collapsed'))
+  _brushSection.style.maxHeight = _brushSection.scrollHeight + 'px';
 
 function refreshBrushUI() {
   brushList.querySelectorAll('button').forEach(b =>
@@ -4754,6 +4778,12 @@ function _tryFetchMapdataJson() {
 function applyCanonical(canon) {
   if (!canon || !Array.isArray(canon.map) || canon.map.length !== ROWS * COLS) return;
   canon.map.forEach((v, i) => { map[Math.floor(i / COLS)][i % COLS] = v; });
+  if (canon.stele && typeof canon.stele.col === 'number') {
+    BUILDING_TILES.delete(`${STELE_COL},${STELE_ROW}`);
+    STELE_COL = canon.stele.col; STELE_ROW = canon.stele.row;
+    BUILDING_TILES.add(`${STELE_COL},${STELE_ROW}`);
+  }
+  map[STELE_ROW][STELE_COL] = T.GRASS; // stele tile must always be walkable grass
   decorations.length = 0;
   for (const d of (canon.decos || [])) {
     if ((d.type === 'flower' || d.type === 'sunflower') && rng(d.col, d.row, 919) >= 0.6) continue;

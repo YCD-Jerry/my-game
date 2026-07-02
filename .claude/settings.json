@@ -7,7 +7,8 @@
       "Read(//c/Users/ycd_1/.trae/**)",
       "Bash(xargs wc -l)",
       "Bash(git add *)",
-      "Bash(git commit -m 'Add stele, fishing system overhaul, cooking minigame, backpack discard, chest persistence, berry/fishing achievements, 5 fish types, reset progress *)"
+      "Bash(git commit -m 'Add stele, fishing system overhaul, cooking minigame, backpack discard, chest persistence, berry/fishing achievements, 5 fish types, reset progress *)",
+      "Bash(node -e ' *)"
     ]
   }
 }
