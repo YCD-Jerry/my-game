@@ -69,9 +69,21 @@ const inventory  = {
   lumber: 0, pinecone: 0,
   // special items
   driftBottle: 0,
+  // combat drops
+  niterPowder: 0, niterShard: 0, niterCore: 0,
+  crudeDagger: 0, durableScimitar: 0, refinedBlade: 0,
+  rottingFlesh: 0,
 };
 let   lootMessage = null; // { text, timer }
 let   shopOpen    = false;
+let   craftOpen   = false;
+
+const CRAFT_RECIPES = [
+  { key: 'niterShard',      icon: '💠', needs: { niterPowder:    3 }, out: 'niterShard'      },
+  { key: 'niterCore',       icon: '🔮', needs: { niterShard:     3 }, out: 'niterCore'       },
+  { key: 'durableScimitar', icon: '⚔️', needs: { crudeDagger:    3 }, out: 'durableScimitar' },
+  { key: 'refinedBlade',    icon: '🔱', needs: { durableScimitar: 3 }, out: 'refinedBlade'   },
+];
 
 function saveInventory() {
   try { localStorage.setItem('mapExplorerInventory', JSON.stringify(inventory)); } catch (_) {}
@@ -262,6 +274,8 @@ const SHOP_ITEMS = [
 
 // ── Stove ─────────────────────────────────────────────────────────────────────
 const STOVE_COL = 44, STOVE_ROW = 30;
+// ── Crafting table (below shop) ───────────────────────────────────────────────
+const CRAFT_COL = 40, CRAFT_ROW = 31;
 
 // ── Building protection ────────────────────────────────────────────────────────
 // Add every building tile here. Admin mode can never paint over these tiles.
@@ -271,11 +285,108 @@ function protectBuilding(col, row) { BUILDING_TILES.add(`${col},${row}`); }
 // ── Stone stele (前 of Washington Monument) ───────────────────────────────────
 let STELE_COL = Math.floor(COLS / 2) + 3; // 3 tiles east of monument center (moveable via admin)
 let STELE_ROW = 36;                      // 2 tiles south of monument base (row 34)
-let   steleOpen = false;
+let steleOpen = false;
+// Washington Monument heal state
+const monumentHeal = {
+  stillTimer: 0,   // frames player has been still near the monument
+  healed:     false, // true while at full HP after the current heal (resets when HP drops)
+  glowTimer:  0,   // counts down after a successful heal (rising green light)
+};
 
 protectBuilding(SHOP_COL,  SHOP_ROW);
 protectBuilding(STOVE_COL, STOVE_ROW);
 protectBuilding(STELE_COL, STELE_ROW);
+protectBuilding(CRAFT_COL, CRAFT_ROW);
+
+// ── Combat: sealed chest & guardian zombie ────────────────────────────────────
+// The chest is sealed behind a red ring and guarded by a zombie. Defeat the
+// zombie (12 HP) to break the seal, then open the chest like any other.
+// Combat state (HP / energy) lives in memory only — refresh restarts the fight.
+const ENERGY_MAX    = 12;                        // energy capacity for the Q ultimate
+const GOBLIN_MAX_HP = 18;                        // each goblin guard takes 18 hits to kill
+const PLAYER_MAX_HP        = 100;               // Genshin-style HP pool
+const ZOMBIE_DMG           = 10;                // damage per zombie melee hit
+const ZOMBIE_AGGRO_R       = TILE * 4.5;        // starts chasing inside this radius
+const ZOMBIE_LEASH_R       = TILE * 6.5;        // max distance from home before it gives up
+const ZOMBIE_ATTACK_RANGE  = 26;                // px — melee reach
+const ZOMBIE_CHASE_SPEED   = 1.15;              // px/frame (player SPEED is 3 — escapable)
+const ZOMBIE_WINDUP_FRAMES = 26;                // creeper-hiss telegraph before the bite
+const ZOMBIE_ATK_COOLDOWN  = 55;                // frames between melee attempts
+const PLAYER_INVULN_FRAMES = 50;                // i-frames after taking a hit
+const RESPAWN_FRAMES       = 110;               // death fade in + out
+const E_SKILL_CD_FRAMES    = 360;               // 6 s at 60 fps
+
+function _mkZombie(col, row) {
+  return { col, row, px: col * TILE, py: row * TILE,
+           homeX: col * TILE, homeY: row * TILE,
+           hp: GOBLIN_MAX_HP, maxHp: GOBLIN_MAX_HP, ghostHp: GOBLIN_MAX_HP,
+           alive: true, hitFlash: 0, knockX: 0, knockY: 0, deathTimer: 0,
+           state: 'idle', windup: 0, atkCooldown: 0, defDown: 0 };
+}
+function _mkEncounter(cc, cr, guards, loot, key) {
+  return {
+    chest:   { col: cc, row: cr, open: false, unsealed: false, disappearTimer: 0 },
+    zombies: guards.map(([c, r]) => _mkZombie(c, r)),
+    loot, key,
+  };
+}
+
+// Four guarded encounters scattered around the map (clearCombatTiles forces grass under each)
+const ENCOUNTERS = [
+  _mkEncounter(37, 44, [[39,44],[41,44]],           'splendid', 'mygame_sealed_opened'),  // SE of spawn
+  _mkEncounter(15, 20, [[17,20],[15,22]],           'precious', 'mygame_seal2_opened'),   // NW interior
+  _mkEncounter(50, 18, [[52,18],[50,20],[52,20]],   'splendid', 'mygame_seal3_opened'),   // NE interior – 3 guards
+  _mkEncounter(12, 52, [[14,52],[12,54],[14,54]],   'splendid', 'mygame_seal4_opened'),   // SW interior – 3 guards
+];
+// Tile-position set used to keep map generation from overwriting encounter areas
+const _encTiles = new Set(ENCOUNTERS.flatMap(e => [
+  `${e.chest.col},${e.chest.row}`,
+  ...e.zombies.map(z => `${z.col},${z.row}`),
+]));
+
+// ── Standalone creepers (no chest, respawn each session) ──────────────────────
+const CREEPER_MAX_HP        = 6;
+const CREEPER_DMG           = 8;
+const CREEPER_AGGRO_R       = TILE * 3.5;
+const CREEPER_LEASH_R       = TILE * 5.5;
+const CREEPER_ATTACK_RANGE  = 22;
+const CREEPER_SPEED         = 1.8;
+const CREEPER_WINDUP_FRAMES = 50;
+const CREEPER_ATK_COOLDOWN  = 100;
+
+function _mkCreeper(col, row) {
+  return { col, row, px: col * TILE, py: row * TILE,
+           homeX: col * TILE, homeY: row * TILE,
+           hp: CREEPER_MAX_HP, maxHp: CREEPER_MAX_HP, ghostHp: CREEPER_MAX_HP,
+           alive: true, hitFlash: 0, knockX: 0, knockY: 0, deathTimer: 0,
+           state: 'idle', windup: 0, atkCooldown: 0, defDown: 0 };
+}
+// Populated after the map is finalised (see _spawnCreepers call below)
+const CREEPERS = [];
+
+// Convenience alias so legacy references to sealedChest still point at enc 0
+const sealedChest = ENCOUNTERS[0].chest;
+const combat = {
+  energy: 0,
+  attackAnim: 0, attackCooldown: 0, attackFacing: 'down',
+  // E skill — directional beam, CD-based
+  eSkillAnim: 0, eSkillFacing: 'down', eSkillCooldown: 0,
+  // Q ultimate — circular shockwave, energy-based
+  ultAnim: 0, screenShake: 0,
+  playerHp: PLAYER_MAX_HP, playerGhostHp: PLAYER_MAX_HP,
+  playerHitFlash: 0, playerInvuln: 0, respawnTimer: 0,
+  particles: [], floatTexts: [],
+};
+// Restore each encounter's completion state from localStorage
+try {
+  for (const enc of ENCOUNTERS) {
+    if (localStorage.getItem(enc.key)) {
+      enc.chest.open = true; enc.chest.unsealed = true;
+      for (const z of enc.zombies) { z.alive = false; z.hp = 0; }
+    }
+  }
+} catch (_) {}
+for (const enc of ENCOUNTERS) protectBuilding(enc.chest.col, enc.chest.row);
 
 // ── Recipes (19 dishes) ──────────────────────────────────────────────────────
 // cookZones: [coldEnd, normal1End, perfectEnd, normal2End]  (0-1 fractions)
@@ -352,6 +463,14 @@ const INVENTORY_META = [
   { key: 'pinecone',    icon: '🌰' },
   // special
   { key: 'driftBottle', icon: '🫙' },
+  // combat drops & crafted items
+  { key: 'niterPowder',     icon: '🧪' },
+  { key: 'niterShard',      icon: '💠' },
+  { key: 'niterCore',       icon: '🔮' },
+  { key: 'crudeDagger',     icon: '🗡️' },
+  { key: 'durableScimitar', icon: '⚔️' },
+  { key: 'refinedBlade',    icon: '🔱' },
+  { key: 'rottingFlesh',    icon: '🧟' },
 ];
 
 // ── Backpack categories ───────────────────────────────────────────────────────
@@ -365,6 +484,7 @@ const BAG_INGREDIENT_KEYS = [
 const BAG_FISH_KEYS     = ['grass_carp', 'bass', 'red_carp', 'goldfish', 'huso'];
 const BAG_FOOD_KEYS     = RECIPES.map(r => r.key);
 const BAG_MATERIAL_KEYS = ['lumber', 'pinecone', 'driftBottle'];
+const BAG_COMBAT_KEYS   = ['niterPowder','niterShard','niterCore','crudeDagger','durableScimitar','refinedBlade','rottingFlesh'];
 
 // ── Dig spots: a buried chest. Stand nearby, press F to dig, press F again to open.
 const digSpots   = [];
@@ -485,6 +605,8 @@ function buildMap() {
       if (c === SHOP_COL  && r === SHOP_ROW)  continue;
       if (c === STOVE_COL && r === STOVE_ROW) continue;
       if (c === STELE_COL && r === STELE_ROW) continue;
+      if (c === CRAFT_COL && r === CRAFT_ROW) continue;
+      if (_encTiles.has(`${c},${r}`)) continue;
       if (rng(c, r, 31) >= 0.04) continue; // ~4% of grass tiles become a tree (⅔ of original)
       const tv = rng(c, r, 53);
       const half = rng(c, r, 71) < 0.5; // used to thin round & pine trees by half
@@ -543,6 +665,8 @@ function buildMap() {
       if (c === SHOP_COL  && r === SHOP_ROW)  continue;
       if (c === STOVE_COL && r === STOVE_ROW) continue;
       if (c === STELE_COL && r === STELE_ROW) continue;
+      if (c === CRAFT_COL && r === CRAFT_ROW) continue;
+      if (_encTiles.has(`${c},${r}`)) continue;
       const v = rng(c, r, 42);
       if      (v < 0.006) decorations.push({ col: c, row: r, type: 'sunflower' });
       else if (v < 0.036) decorations.push({ col: c, row: r, type: 'flower' });
@@ -571,6 +695,7 @@ function buildMap() {
         BUILDING_TILES.add(`${STELE_COL},${STELE_ROW}`);
       }
       map[STELE_ROW][STELE_COL] = T.GRASS; // stele tile must always be walkable grass
+      clearCombatTiles();                  // sealed chest + zombie must sit on open ground
       // Restore decorations — keep only 2/5 of flowers/sunflowers (deterministic thinning)
       decorations.length = 0;
       for (const d of (canon.decos || [])) {
@@ -850,6 +975,64 @@ function applyEdits(editObj) {
 const publishedMap = (typeof window !== 'undefined' && window.PUBLISHED_MAP) || {};
 applyEdits(publishedMap);
 applyEdits(mapEdits);
+clearCombatTiles(); // edits may have covered the combat area — keep it clear
+
+// Randomly place creepers across the map after all edits are applied.
+// The map is divided into a 3×3 grid; one creeper is attempted per zone.
+// Constraints: tile must be grass, no water within 3 tiles, not near spawn or
+// encounter positions, min 10-tile separation between any two creepers.
+(function _spawnCreepers() {
+  const WATER_R   = 3;   // water-free radius (tiles)
+  const SPAWN_R   = 8;   // exclusion radius around player spawn (col 32, row 40)
+  const MIN_DIST  = 10;  // min separation between two creepers
+  const MARGIN    = WATER_R + 1;
+  const ZONE_COLS = 3, ZONE_ROWS = 3;
+  const zW = Math.floor((COLS - MARGIN * 2) / ZONE_COLS);
+  const zH = Math.floor((ROWS - MARGIN * 2) / ZONE_ROWS);
+
+  function isValid(c, r) {
+    if (map[r][c] !== T.GRASS) return false;
+    if (Math.hypot(c - 32, r - 40) < SPAWN_R) return false;
+    if (_encTiles.has(`${c},${r}`)) return false;
+    if (BUILDING_TILES && BUILDING_TILES.has(`${c},${r}`)) return false;
+    if (monumentBlocked[`${c},${r}`]) return false;
+    for (let dr = -WATER_R; dr <= WATER_R; dr++)
+      for (let dc = -WATER_R; dc <= WATER_R; dc++) {
+        const nr = r + dr, nc = c + dc;
+        if (nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS) continue;
+        if (map[nr][nc] === T.WATER) return false;
+        // Within 1-tile radius: also reject trees, buildings, encounter tiles
+        if (Math.abs(dr) <= 1 && Math.abs(dc) <= 1) {
+          if (TREE_TILE_TYPES.has(map[nr][nc])) return false;
+          if (_encTiles.has(`${nc},${nr}`)) return false;
+          if (BUILDING_TILES && BUILDING_TILES.has(`${nc},${nr}`)) return false;
+          if (monumentBlocked[`${nc},${nr}`]) return false;
+        }
+      }
+    return true;
+  }
+
+  for (let zr = 0; zr < ZONE_ROWS; zr++) {
+    for (let zc = 0; zc < ZONE_COLS; zc++) {
+      const r0 = MARGIN + zr * zH, r1 = r0 + zH;
+      const c0 = MARGIN + zc * zW, c1 = c0 + zW;
+      // Collect valid tiles in this zone, shuffle, pick first that clears min-dist
+      const pool = [];
+      for (let r = r0; r < r1; r++)
+        for (let c = c0; c < c1; c++)
+          if (isValid(c, r)) pool.push([c, r]);
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+      for (const [c, r] of pool) {
+        const far = CREEPERS.every(crp => Math.hypot(crp.col - c, crp.row - r) >= MIN_DIST);
+        if (far) { CREEPERS.push(_mkCreeper(c, r)); break; }
+      }
+    }
+  }
+})();
+
 generateBerryBushes();
 loadBerryState();
 renderBerryCanvas();
@@ -953,6 +1136,15 @@ const I18N = {
     grass_carp: '草鱼', bass: '鲈鱼', red_carp: '红鲤鱼', goldfish: '金鱼', huso: '鳇鱼', fish_meat: '鱼肉',
     bagFish: '鱼类', pressGFish: '[G] 钓鱼',
     slaughterHint: '右键宰杀 → 鱼肉', slaughterDone: '鱼肉 x1',
+    niterPowder: '硝石粉末', niterShard: '硝石碎片', niterCore: '硝石核心',
+    crudeDagger: '粗制匕首', durableScimitar: '耐用弯刀', refinedBlade: '精制利刃',
+    rottingFlesh: '腐肉',
+    pressCraft: '按 F 合成',
+    craftTitle: '⚒️ 合成台', craftClose: '关闭',
+    craft: '合成', craftDone: (icon, name) => `合成了 ${icon} ${name}`,
+    craftMissing: '材料不足',
+    bagCombat: '战斗材料',
+    monsterDrop: (icon, name, n) => `获得 ${icon} ${name} ×${n}`,
   },
   en: {
     settings: 'Settings', gender: 'Gender', male: 'Male', female: 'Female',
@@ -1011,6 +1203,15 @@ const I18N = {
     grass_carp: 'Grass Carp', bass: 'Bass', red_carp: 'Red Carp', goldfish: 'Goldfish', huso: 'Huso', fish_meat: 'Fish Meat',
     bagFish: 'Fish', pressGFish: '[G] Fish',
     slaughterHint: 'Right-click to slaughter → Fish Meat', slaughterDone: 'Fish Meat x1',
+    niterPowder: 'Niter Powder', niterShard: 'Niter Shard', niterCore: 'Niter Core',
+    crudeDagger: 'Crude Dagger', durableScimitar: 'Durable Scimitar', refinedBlade: 'Refined Blade',
+    rottingFlesh: 'Rotting Flesh',
+    pressCraft: 'Press F to craft',
+    craftTitle: '⚒️ Craft Table', craftClose: 'Close',
+    craft: 'Craft', craftDone: (icon, name) => `Crafted ${icon} ${name}`,
+    craftMissing: 'Not enough materials',
+    bagCombat: 'Combat Materials',
+    monsterDrop: (icon, name, n) => `Got ${icon} ${name} ×${n}`,
   },
 };
 function t(key, ...args) {
@@ -1022,7 +1223,7 @@ function t(key, ...args) {
 let settingsOpen = false;
 const keys = {};
 function isTyping(e) {
-  return settingsOpen || shopOpen || cookOpen || bagOpen || achOpen || fishingOpen || steleOpen || (e.target && e.target.tagName === 'INPUT');
+  return settingsOpen || shopOpen || cookOpen || craftOpen || bagOpen || achOpen || fishingOpen || steleOpen || (e.target && e.target.tagName === 'INPUT');
 }
 window.addEventListener('keydown', e => {
   // Fishing overlay captures its own keys before isTyping
@@ -1054,6 +1255,11 @@ window.addEventListener('keydown', e => {
     activateSelected();
     return;
   }
+
+  // R: melee  E: beam skill (6 s CD)  Q: shockwave ult (energy-based)
+  if ((e.key === 'r' || e.key === 'R') && !e.repeat) { doPlayerAttack(); return; }
+  if ((e.key === 'e' || e.key === 'E') && !e.repeat) { doPlayerESkill(); return; }
+  if ((e.key === 'q' || e.key === 'Q') && !e.repeat) { doPlayerUlt();    return; }
 
   // When 2+ interactions are reachable, arrow keys cycle the selection
   // (instead of moving), so the player can pick which one they want.
@@ -1138,26 +1344,41 @@ canvas.addEventListener('click', e => {
   const tc = Math.floor(wx / TILE), tr = Math.floor(wy / TILE);
   if (tc < 0 || tc >= COLS || tr < 0 || tr >= ROWS) return;
 
-  const sc = player.moving ? player.targetCol : player.col;
-  const sr = player.moving ? player.targetRow : player.row;
   const adj = Math.max(Math.abs(tc - player.col), Math.abs(tr - player.row)) <= 1;
 
-  // 2) tree: chop if adjacent, else walk to nearest adjacent tile
+  // 2) tree: chop if adjacent
   if (TREE_TILE_TYPES.has(map[tr][tc])) {
-    if (adj) { chopTree(tc, tr); return; }
-    walkAdjacentTo(sc, sr, tc, tr);
+    if (adj) chopTree(tc, tr);
     return;
   }
 
-  // 3) unwalkable (building, chest, water…) → walk to nearest adjacent tile
-  if (!isWalkable(tr, tc)) {
-    walkAdjacentTo(sc, sr, tc, tr);
+  // 3a) click on a living goblin within reach → face + swing
+  for (const enc of ENCOUNTERS) {
+    for (const z of enc.zombies) {
+      if (!z.alive) continue;
+      if (Math.hypot(z.px + 16 - wx, z.py + 16 - wy) > TILE) continue;
+      const dpx = z.px - player.px, dpy = z.py - player.py;
+      if (Math.hypot(dpx, dpy) > TILE * 2.5) return;
+      if (Math.abs(dpx) >= Math.abs(dpy)) player.facing = dpx > 0 ? 'right' : 'left';
+      else                                player.facing = dpy > 0 ? 'down'  : 'up';
+      doPlayerAttack();
+      return;
+    }
+  }
+
+  // 3b) click on a living creeper within reach → face + swing
+  for (const crp of CREEPERS) {
+    if (!crp.alive) continue;
+    if (Math.hypot(crp.px + 16 - wx, crp.py + 16 - wy) > TILE) continue;
+    const dpx = crp.px - player.px, dpy = crp.py - player.py;
+    if (Math.hypot(dpx, dpy) > TILE * 2.5) return;
+    if (Math.abs(dpx) >= Math.abs(dpy)) player.facing = dpx > 0 ? 'right' : 'left';
+    else                                player.facing = dpy > 0 ? 'down'  : 'up';
+    doPlayerAttack();
     return;
   }
 
-  // 4) walkable → move directly there
-  const path = findPath(sc, sr, tc, tr);
-  if (path.length) { movePath = path; moveTarget = { col: tc, row: tr, t: 40 }; }
+  // Plain tile click — no movement (use keyboard/WASD to move)
 });
 
 // Walk to the nearest walkable tile adjacent to (tc, tr).
@@ -1247,6 +1468,12 @@ function isWalkable(r, c) {
   if (c === SHOP_COL  && r === SHOP_ROW)  return false;
   if (c === STOVE_COL && r === STOVE_ROW) return false;
   if (c === STELE_COL && r === STELE_ROW) return false;
+  if (c === CRAFT_COL && r === CRAFT_ROW) return false;
+  for (const enc of ENCOUNTERS) {
+    if (!enc.chest.open && c === enc.chest.col && r === enc.chest.row) return false;
+    for (const z of enc.zombies) if (z.alive && c === z.col && r === z.row) return false;
+  }
+  for (const crp of CREEPERS) if (crp.alive && c === crp.col && r === crp.row) return false;
   const t = map[r][c];
   if (t === T.WATER) {
     const b = bridgeTileIndex[`${c},${r}`];
@@ -1531,12 +1758,23 @@ function doOpenCooking() {
   openCookUI();
 }
 
+function doOpenCrafting() {
+  craftOpen = true;
+  for (const k in keys) keys[k] = false;
+  openCraftUI();
+}
+
 // Build the list of interactions the player can currently reach.
 // Each entry: { icon, label, act }
 function buildInteractions() {
   const list = [];
   for (const ch of chests) {
     if (!ch.open && near(ch)) list.push({ icon: '💰', label: t('pressOpen'), act: () => doOpenChest(ch) });
+  }
+  // Sealed chest: only interactable once the guardian zombie is defeated
+  for (const enc of ENCOUNTERS) {
+    if (enc.chest.unsealed && !enc.chest.open && near(enc.chest))
+      list.push({ icon: '👑', label: t('pressOpen'), act: () => doOpenSealedChest(enc) });
   }
   for (const ds of digSpots) {
     if (!near(ds)) continue;
@@ -1562,6 +1800,8 @@ function buildInteractions() {
     list.push({ icon: '🏪', label: t('pressShop'), act: doOpenShop });
   if (Math.abs(player.col - STOVE_COL) <= 1 && Math.abs(player.row - STOVE_ROW) <= 1)
     list.push({ icon: '🍳', label: t('pressCook'), act: doOpenCooking });
+  if (Math.abs(player.col - CRAFT_COL) <= 1 && Math.abs(player.row - CRAFT_ROW) <= 1)
+    list.push({ icon: '⚒️', label: t('pressCraft'), act: doOpenCrafting });
   if (Math.hypot(player.col - STELE_COL, player.row - STELE_ROW) <= 2.5)
     list.push({ icon: '📜', label: t('pressViewStele'), act: doViewStele });
   return list;
@@ -2251,6 +2491,7 @@ function renderTreeCanvas() {
   drawMonument(tctx);
   drawShopBuilding(tctx);
   drawStoveBuilding(tctx);
+  drawCraftingTable(tctx);
 }
 
 function drawShopBuilding(g) {
@@ -2301,6 +2542,47 @@ function drawShopBuilding(g) {
   g.font = 'bold 7px sans-serif';
   g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillText('SHOP', x + 17, y + 6);
+}
+
+function drawCraftingTable(g) {
+  const x = CRAFT_COL * TILE, y = CRAFT_ROW * TILE;
+  // Drop shadow
+  g.fillStyle = 'rgba(0,0,0,0.18)';
+  g.fillRect(x + 2, y + 30, 30, 6);
+  // Table legs (dark)
+  g.fillStyle = '#5a3510';
+  g.fillRect(x + 3,  y + 22, 5, 10);
+  g.fillRect(x + 24, y + 22, 5, 10);
+  // Table top surface (lighter wood)
+  g.fillStyle = '#a0621e';
+  g.fillRect(x + 1, y + 12, 30, 12);
+  // Top-surface edge highlight
+  g.fillStyle = '#c07830';
+  g.fillRect(x + 1, y + 12, 30, 3);
+  // Wood grain lines on surface
+  g.fillStyle = 'rgba(0,0,0,0.14)';
+  for (const ox of [7, 14, 21]) g.fillRect(x + ox, y + 12, 1, 12);
+  // Anvil block on tabletop (dark grey)
+  g.fillStyle = '#555560';
+  g.fillRect(x + 8, y + 5, 16, 8);
+  g.fillStyle = '#44444e';
+  g.fillRect(x + 8, y + 5, 16, 3); // top face
+  g.fillStyle = '#6a6a78';
+  g.fillRect(x + 22, y + 5, 2, 8); // right highlight
+  // Small hammer on the right of anvil
+  g.fillStyle = '#8b5e3c';  // handle
+  g.fillRect(x + 22, y + 9, 2, 6);
+  g.fillStyle = '#9090a0';  // hammer head
+  g.fillRect(x + 20, y + 7, 6, 4);
+  // Sign label
+  g.save();
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = 'bold 5.5px sans-serif';
+  g.fillStyle = '#ffd84d';
+  g.shadowColor = 'rgba(0,0,0,0.8)'; g.shadowBlur = 2;
+  g.fillText('CRAFT', x + 16, y + 2);
+  g.shadowBlur = 0;
+  g.restore();
 }
 
 function drawStoveBuilding(g) {
@@ -2435,6 +2717,1427 @@ function drawStoveFlames() {
   }
 }
 
+// ── Combat system ─────────────────────────────────────────────────────────────
+const ATTACK_COOLDOWN_FRAMES = 24; // 0.4 s between swings
+const ATTACK_ANIM_FRAMES     = 12;
+const ULT_ANIM_FRAMES        = 32;
+const ZOMBIE_DEATH_FRAMES    = 48;
+
+// Sealed chest and zombie must always stand on open, walkable ground —
+// clear any water/tree the canonical map or admin edits left there.
+function clearCombatTiles() {
+  for (const enc of ENCOUNTERS) {
+    const positions = [[enc.chest.col, enc.chest.row], ...enc.zombies.map(z => [z.col, z.row])];
+    for (const [c, r] of positions) {
+      const tt = map[r][c];
+      if (tt === T.WATER || tt === T.SAND || TREE_TILE_TYPES.has(tt)) map[r][c] = T.GRASS;
+    }
+  }
+}
+
+function _facingVec(f) {
+  return f === 'left' ? [-1, 0] : f === 'right' ? [1, 0] : f === 'up' ? [0, -1] : [0, 1];
+}
+
+function _spawnCombatParticles(x, y, n, colors, speed, gravity, square) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const v = speed * (0.4 + Math.random() * 0.9);
+    combat.particles.push({
+      x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - speed * 0.4,
+      g: gravity, size: 2 + Math.random() * 3, square,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      life: 1, decay: 0.02 + Math.random() * 0.02,
+    });
+  }
+}
+
+function doPlayerAttack() {
+  if (combat.respawnTimer > 0) return;
+  if (combat.attackCooldown > 0) return;
+  combat.attackCooldown = ATTACK_COOLDOWN_FRAMES;
+  combat.attackAnim = ATTACK_ANIM_FRAMES;
+  combat.attackFacing = player.facing;
+  const [fx, fy] = _facingVec(player.facing);
+  const ax = player.px + 16 + fx * TILE, ay = player.py + 16 + fy * TILE;
+  let hit = false;
+  for (const enc of ENCOUNTERS) {
+    for (const z of enc.zombies) {
+      if (!z.alive) continue;
+      if (Math.hypot(z.px + 16 - ax, z.py + 16 - ay) <= TILE * 0.95) {
+        hitZombie(z, 1, fx, fy); hit = true;
+      }
+    }
+  }
+  for (const crp of CREEPERS) {
+    if (!crp.alive) continue;
+    // directional swing OR point-blank (within 1 tile of player center, any direction)
+    const cpx = crp.px + 16, cpy = crp.py + 16;
+    const swingHit = Math.hypot(cpx - ax, cpy - ay) <= TILE * 1.1;
+    const closeHit = Math.hypot(cpx - (player.px + 16), cpy - (player.py + 16)) <= TILE * 0.9;
+    if (swingHit || closeHit) { hitCreeper(crp, 1, fx, fy); hit = true; }
+  }
+  if (hit) combat.energy = Math.min(ENERGY_MAX, combat.energy + 1);
+}
+
+const E1_DEBUFF_FRAMES = 300;  // 5 s at 60 fps
+
+// E1 skill — directional beam, 6 s CD, applies -20% DEF debuff (no damage)
+function doPlayerESkill() {
+  if (combat.respawnTimer > 0) return;
+  if (combat.eSkillCooldown > 0) return;
+  combat.eSkillCooldown = E_SKILL_CD_FRAMES;
+  combat.eSkillAnim     = ULT_ANIM_FRAMES;
+  combat.eSkillFacing   = player.facing;
+  combat.screenShake    = Math.max(combat.screenShake, 6);
+  const [fx, fy] = _facingVec(player.facing);
+  const pxc = player.px + 16, pyc = player.py + 16;
+  _spawnCombatParticles(pxc + fx * TILE, pyc + fy * TILE, 20,
+    ['#b060ff', '#8030dd', '#e0b0ff'], 4, 0.08, false);
+  const applyDebuff = target => {
+    if (!target.alive) return;
+    const dx = target.px + 16 - pxc, dy = target.py + 16 - pyc;
+    const fwd  = dx * fx + dy * fy;
+    const side = Math.abs(dx * fy - dy * fx);
+    if (fwd >= -TILE * 0.5 && fwd <= TILE * 3.5 && side <= TILE) {
+      target.defDown = E1_DEBUFF_FRAMES;
+      target.hitFlash = 6;
+      _spawnCombatParticles(target.px + 16, target.py + 10, 10,
+        ['#b060ff', '#e0b0ff'], 2.5, 0.10, false);
+      combat.floatTexts.push({
+        x: target.px + 16, y: target.py,
+        text: settings.language !== 'en' ? '防御↓' : 'DEF↓',
+        color: '#c080ff', life: 1,
+      });
+    }
+  };
+  for (const enc of ENCOUNTERS) for (const z of enc.zombies) applyDebuff(z);
+  for (const crp of CREEPERS) applyDebuff(crp);
+}
+
+// Q ultimate — circular shockwave, requires full energy
+function doPlayerUlt() {
+  if (combat.respawnTimer > 0) return;
+  if (combat.energy < ENERGY_MAX) return;
+  combat.energy = 0;
+  combat.ultAnim    = ULT_ANIM_FRAMES;
+  combat.screenShake = 18;
+  const pxc = player.px + 16, pyc = player.py + 16;
+  const BLAST_R = TILE * 3.5;
+  _spawnCombatParticles(pxc, pyc, 40, ['#ffd84d', '#ff8020', '#fff6c0', '#ffffff'], 6, 0.10, false);
+  for (const enc of ENCOUNTERS) {
+    for (const z of enc.zombies) {
+      if (!z.alive) continue;
+      if (Math.hypot(z.px + 16 - pxc, z.py + 16 - pyc) <= BLAST_R) hitZombie(z, 999, 0, 0);
+    }
+  }
+  for (const crp of CREEPERS) {
+    if (!crp.alive) continue;
+    if (Math.hypot(crp.px + 16 - pxc, crp.py + 16 - pyc) <= BLAST_R) hitCreeper(crp, 999, 0, 0);
+  }
+}
+
+function _applyDefDown(target, baseDmg) {
+  return target.defDown > 0 ? Math.ceil(baseDmg * 1.25) : baseDmg;
+}
+
+function hitZombie(zom, dmg, fx, fy) {
+  if (!zom.alive) return;
+  const realDmg = _applyDefDown(zom, dmg);
+  zom.hp = Math.max(0, zom.hp - realDmg);
+  zom.hitFlash = 8;
+  zom.knockX += fx * 7; zom.knockY += fy * 7;
+  if (zom.state === 'windup') {
+    zom.state = 'chase'; zom.windup = 0;
+    zom.atkCooldown = Math.max(zom.atkCooldown, 22);
+  }
+  const zx = zom.px + 16, zy = zom.py + 10;
+  _spawnCombatParticles(zx, zy, realDmg > 1 ? 20 : 8,
+    ['#7ec850', '#4aa832', '#2e701e'], realDmg > 1 ? 4.5 : 2.5, 0.12, true);
+  combat.floatTexts.push({
+    x: zx + (Math.random() - 0.5) * 8, y: zy - 14,
+    text: realDmg > 1 ? 'KO!' : '-1',
+    color: realDmg > 1 ? '#ffd84d' : '#ff6060', life: 1,
+  });
+  if (zom.hp <= 0) {
+    zom.alive = false;
+    zom.state = 'idle';
+    zom.deathTimer = ZOMBIE_DEATH_FRAMES;
+    _spawnCombatParticles(zx, zy + 8, 26, ['#7ec850', '#4aa832', '#245818'], 3.5, 0.10, true);
+    const drop = randInt(1, 3);
+    inventory.crudeDagger += drop;
+    saveInventory();
+    showNotif(t('monsterDrop', '🗡️', t('crudeDagger'), drop));
+  }
+}
+
+function hitCreeper(crp, dmg, fx, fy) {
+  if (!crp.alive) return;
+  const realDmg = _applyDefDown(crp, dmg);
+  crp.hp = Math.max(0, crp.hp - realDmg);
+  crp.hitFlash = 8;
+  crp.knockX += fx * 9; crp.knockY += fy * 9;
+  if (crp.state === 'windup') {
+    crp.state = 'chase'; crp.windup = 0;
+    crp.atkCooldown = Math.max(crp.atkCooldown, 20);
+  }
+  const cx = crp.px + 16, cy = crp.py + 10;
+  _spawnCombatParticles(cx, cy, realDmg > 1 ? 18 : 7,
+    ['#60dd30', '#40aa18', '#80ff50'], realDmg > 1 ? 4 : 2.2, 0.12, true);
+  combat.floatTexts.push({
+    x: cx + (Math.random() - 0.5) * 8, y: cy - 14,
+    text: realDmg > 1 ? 'KO!' : '-1',
+    color: realDmg > 1 ? '#ffd84d' : '#60dd30', life: 1,
+  });
+  if (crp.hp <= 0) {
+    crp.alive = false;
+    crp.state = 'idle';
+    crp.deathTimer = ZOMBIE_DEATH_FRAMES;
+    _spawnCombatParticles(cx, cy + 8, 20, ['#60dd30', '#40aa18', '#ffffff'], 4, 0.10, true);
+    const drop = randInt(1, 3);
+    inventory.niterPowder += drop;
+    saveInventory();
+    showNotif(t('monsterDrop', '🧪', t('niterPowder'), drop));
+  }
+}
+
+function breakSeal(enc) {
+  if (enc.chest.unsealed) return;
+  enc.chest.unsealed = true;
+  // Ring shatters: red sparks fly outward from the circle then fade
+  const cx = enc.chest.col * TILE + 16, cy = enc.chest.row * TILE + 20;
+  for (let i = 0; i < 28; i++) {
+    const a = (i / 28) * Math.PI * 2;
+    combat.particles.push({
+      x: cx + Math.cos(a) * 22, y: cy + Math.sin(a) * 14,
+      vx: Math.cos(a) * (1.5 + Math.random() * 2),
+      vy: Math.sin(a) * (1.5 + Math.random() * 2) - 1,
+      g: 0.05, size: 2 + Math.random() * 2.5, square: false,
+      color: Math.random() > 0.5 ? '#ff3040' : '#ff8090',
+      life: 1, decay: 0.012 + Math.random() * 0.012,
+    });
+  }
+  showNotif(settings.language !== 'en'
+    ? '⚔️ 守卫已被击败，封印解除！宝箱可以打开了'
+    : '⚔️ Guardian defeated — the seal is broken! The chest can now be opened');
+}
+
+function doOpenSealedChest(enc) {
+  enc.chest.open = true;
+  enc.chest.disappearTimer = 240;
+  const spec = CHEST_LOOT[enc.loot] || CHEST_LOOT.splendid;
+  const gold = randInt(spec.g[0], spec.g[1]);
+  inventory.gold      += gold;
+  inventory.diamond   += spec.d;
+  inventory.redflower += spec.f;
+  lootMessage = { text: t('chestLoot', t(spec.name), gold, spec.d, spec.f), timer: 220 };
+  saveInventory();
+  progressAch('chest_splendid');
+  try { localStorage.setItem(enc.key, '1'); } catch (_) {}
+}
+
+// Zombie movement collision — same rules as the player, minus the zombie itself
+function _zombieCanStand(x, y) {
+  const c = Math.floor((x + 16) / TILE), r = Math.floor((y + 16) / TILE);
+  if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return false;
+  const tt = map[r][c];
+  if (tt === T.WATER || TREE_TILE_TYPES.has(tt)) return false;
+  for (const enc of ENCOUNTERS)
+    if (!enc.chest.open && c === enc.chest.col && r === enc.chest.row) return false;
+  return true;
+}
+
+function _zombieStepToward(zom, tx, ty, spd) {
+  const dx = tx - zom.px, dy = ty - zom.py;
+  const d = Math.hypot(dx, dy);
+  if (d < 0.5) return;
+  const vx = (dx / d) * spd, vy = (dy / d) * spd;
+  if (_zombieCanStand(zom.px + vx, zom.py)) zom.px += vx;
+  if (_zombieCanStand(zom.px, zom.py + vy)) zom.py += vy;
+}
+
+function damagePlayer(dmg, fromX, fromY) {
+  if (combat.playerInvuln > 0 || combat.respawnTimer > 0) return;
+  // Monument safe zone — no damage while inside the heal area
+  if (Math.hypot(player.px + 16 - MON_CENTER_X, player.py + 16 - MON_BASE_BOTTOM) <= 3.5 * TILE) return;
+  combat.playerHp = Math.max(0, combat.playerHp - dmg);
+  combat.playerHitFlash = 18;
+  combat.playerInvuln = PLAYER_INVULN_FRAMES;
+  combat.screenShake = Math.max(combat.screenShake, 7);
+  const pcx = player.px + 16, pcy = player.py + 16;
+  _spawnCombatParticles(pcx, pcy - 4, 10, ['#ff5040', '#ff9080', '#ffffff'], 3, 0.12, false);
+  combat.floatTexts.push({
+    x: pcx + (Math.random() - 0.5) * 10, y: pcy - 20,
+    text: '-' + dmg, color: '#ff4a3c', life: 1,
+  });
+  if (combat.playerHp <= 0) {
+    combat.respawnTimer = RESPAWN_FRAMES;
+    for (const enc of ENCOUNTERS) for (const z of enc.zombies) { z.state = 'idle'; z.windup = 0; }
+  }
+}
+
+// Reset after being knocked out — fires at the black midpoint of the death fade
+function doRespawn() {
+  player.col = 32; player.row = 40;
+  player.px = 32 * TILE; player.py = 40 * TILE;
+  player.targetCol = 32; player.targetRow = 40;
+  player.moving = false;
+  moveTarget = null; movePath.length = 0;
+  combat.playerHp = PLAYER_MAX_HP; combat.playerGhostHp = PLAYER_MAX_HP;
+  combat.playerHitFlash = 0; combat.playerInvuln = 0;
+  combat.energy = 0;
+  // Reset all guardians that belong to encounters not yet completed
+  for (const enc of ENCOUNTERS) {
+    if (enc.chest.open) continue; // permanently done — leave alone
+    for (const z of enc.zombies) {
+      z.alive = true; z.hp = z.maxHp; z.ghostHp = z.maxHp;
+      z.px = z.homeX; z.py = z.homeY;
+      z.col = Math.round(z.homeX / TILE); z.row = Math.round(z.homeY / TILE);
+      z.state = 'idle'; z.windup = 0; z.atkCooldown = 0;
+      z.hitFlash = 0; z.knockX = 0; z.knockY = 0; z.deathTimer = 0; z.defDown = 0;
+    }
+  }
+  for (const crp of CREEPERS) {
+    crp.alive = true; crp.hp = crp.maxHp; crp.ghostHp = crp.maxHp;
+    crp.px = crp.homeX; crp.py = crp.homeY;
+    crp.col = Math.round(crp.homeX / TILE); crp.row = Math.round(crp.homeY / TILE);
+    crp.state = 'idle'; crp.windup = 0; crp.atkCooldown = 0;
+    crp.hitFlash = 0; crp.knockX = 0; crp.knockY = 0; crp.deathTimer = 0; crp.defDown = 0;
+  }
+}
+
+function updateCombat() {
+  if (combat.attackCooldown > 0)  combat.attackCooldown--;
+  if (combat.attackAnim > 0)      combat.attackAnim--;
+  if (combat.eSkillCooldown > 0)  combat.eSkillCooldown--;
+  if (combat.eSkillAnim > 0)      combat.eSkillAnim--;
+  if (combat.ultAnim > 0)         combat.ultAnim--;
+  if (combat.screenShake > 0)     combat.screenShake--;
+  if (combat.playerHitFlash > 0)  combat.playerHitFlash--;
+  if (combat.playerInvuln > 0)    combat.playerInvuln--;
+  if (combat.playerGhostHp > combat.playerHp)
+    combat.playerGhostHp = Math.max(combat.playerHp, combat.playerGhostHp - 0.5);
+
+  // ── Per-encounter, per-zombie ticks ───────────────────────────────────────
+  const pcx = player.px + 16, pcy = player.py + 16;
+  const canFight = combat.respawnTimer <= 0 && !fishingOpen && !cookingMinigame;
+  for (const enc of ENCOUNTERS) {
+    let allDead = true;
+    for (const zom of enc.zombies) {
+      if (zom.hitFlash > 0) zom.hitFlash--;
+      zom.knockX *= 0.78; zom.knockY *= 0.78;
+      if (zom.ghostHp > zom.hp)
+        zom.ghostHp = Math.max(zom.hp, zom.ghostHp - 0.07);
+
+      if (zom.defDown > 0) zom.defDown--;
+      if (zom.alive) {
+        allDead = false;
+        if (zom.atkCooldown > 0) zom.atkCooldown--;
+        const zcx = zom.px + 16, zcy = zom.py + 16;
+        const dP    = Math.hypot(pcx - zcx, pcy - zcy);
+        const dHome = Math.hypot(zom.homeX - zom.px, zom.homeY - zom.py);
+
+        if (zom.state === 'windup') {
+          if (--zom.windup <= 0) {
+            zom.state = 'chase';
+            zom.atkCooldown = ZOMBIE_ATK_COOLDOWN;
+            if (canFight && dP <= ZOMBIE_ATTACK_RANGE + 12) damagePlayer(ZOMBIE_DMG, zcx, zcy);
+          }
+        } else if (canFight && dP <= ZOMBIE_AGGRO_R && dHome <= ZOMBIE_LEASH_R) {
+          zom.state = 'chase';
+          if (dP <= ZOMBIE_ATTACK_RANGE) {
+            if (zom.atkCooldown <= 0) { zom.state = 'windup'; zom.windup = ZOMBIE_WINDUP_FRAMES; }
+          } else {
+            _zombieStepToward(zom, player.px, player.py, ZOMBIE_CHASE_SPEED);
+          }
+        } else if (dHome > 2) {
+          zom.state = 'return';
+          _zombieStepToward(zom, zom.homeX, zom.homeY, ZOMBIE_CHASE_SPEED * 0.8);
+        } else {
+          zom.state = 'idle';
+          zom.px = zom.homeX; zom.py = zom.homeY;
+        }
+        zom.col = Math.round(zom.px / TILE);
+        zom.row = Math.round(zom.py / TILE);
+      } else if (zom.deathTimer > 0) {
+        zom.deathTimer--;
+      }
+    }
+    if (allDead && enc.zombies.every(z => z.deathTimer <= 0)) {
+      if (!enc.chest.unsealed) breakSeal(enc);
+    }
+    if (enc.chest.open && enc.chest.disappearTimer > 0) enc.chest.disappearTimer--;
+  }
+
+  // ── Standalone creeper ticks ──────────────────────────────────────────────
+  for (const crp of CREEPERS) {
+    if (crp.hitFlash > 0) crp.hitFlash--;
+    if (crp.defDown > 0)  crp.defDown--;
+    crp.knockX *= 0.78; crp.knockY *= 0.78;
+    if (crp.ghostHp > crp.hp)
+      crp.ghostHp = Math.max(crp.hp, crp.ghostHp - 0.07);
+    if (crp.alive) {
+      if (crp.atkCooldown > 0) crp.atkCooldown--;
+      const ccx = crp.px + 16, ccy = crp.py + 16;
+      const dP    = Math.hypot(pcx - ccx, pcy - ccy);
+      const dHome = Math.hypot(crp.homeX - crp.px, crp.homeY - crp.py);
+      if (crp.state === 'windup') {
+        if (--crp.windup <= 0) {
+          crp.state = 'chase';
+          crp.atkCooldown = CREEPER_ATK_COOLDOWN;
+          if (canFight && dP <= CREEPER_ATTACK_RANGE + 12) damagePlayer(CREEPER_DMG, ccx, ccy);
+        }
+      } else if (canFight && dP <= CREEPER_AGGRO_R && dHome <= CREEPER_LEASH_R) {
+        crp.state = 'chase';
+        if (dP <= CREEPER_ATTACK_RANGE) {
+          if (crp.atkCooldown <= 0) { crp.state = 'windup'; crp.windup = CREEPER_WINDUP_FRAMES; }
+        } else {
+          _zombieStepToward(crp, player.px, player.py, CREEPER_SPEED);
+        }
+      } else if (dHome > 2) {
+        crp.state = 'return';
+        _zombieStepToward(crp, crp.homeX, crp.homeY, CREEPER_SPEED * 0.8);
+      } else {
+        crp.state = 'idle';
+        crp.px = crp.homeX; crp.py = crp.homeY;
+      }
+      crp.col = Math.round(crp.px / TILE);
+      crp.row = Math.round(crp.py / TILE);
+    } else if (crp.deathTimer > 0) {
+      crp.deathTimer--;
+    }
+  }
+
+  for (let i = combat.particles.length - 1; i >= 0; i--) {
+    const p = combat.particles[i];
+    p.x += p.vx; p.y += p.vy; p.vy += p.g;
+    p.life -= p.decay;
+    if (p.life <= 0) combat.particles.splice(i, 1);
+  }
+  for (let i = combat.floatTexts.length - 1; i >= 0; i--) {
+    const ft = combat.floatTexts[i];
+    ft.y -= 0.55; ft.life -= 0.02;
+    if (ft.life <= 0) combat.floatTexts.splice(i, 1);
+  }
+}
+
+// Red seal ring around each unsealed chest
+function drawSealRing(g) {
+  const pulse = 0.5 + 0.5 * Math.sin(tick * 0.06);
+  const rot   = tick * 0.012;
+  for (const enc of ENCOUNTERS) {
+    if (enc.chest.unsealed) continue;
+    const cx = enc.chest.col * TILE + 16, cy = enc.chest.row * TILE + 20;
+    g.save();
+    for (const [rr, aBase, lw] of [[26, 0.14, 6], [22, 0.30, 3], [18, 0.20, 2]]) {
+      g.globalAlpha = aBase + pulse * 0.18;
+      g.strokeStyle = '#ff2030';
+      g.lineWidth = lw;
+      g.beginPath();
+      g.ellipse(cx, cy, rr, rr * 0.62, 0, 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.globalAlpha = 0.55 + pulse * 0.35;
+    g.strokeStyle = '#ff6a70';
+    g.lineWidth = 2.5;
+    for (let i = 0; i < 8; i++) {
+      const a0 = rot + (i / 8) * Math.PI * 2;
+      g.beginPath();
+      g.ellipse(cx, cy, 22, 22 * 0.62, 0, a0, a0 + 0.3);
+      g.stroke();
+    }
+    g.restore();
+  }
+}
+
+// Sealed chest: splendid-tier silhouette in deep crimson/purple
+function drawSealedChest(x, y, open) {
+  const BOT = y + 31, bodyH = 17, lidH = 13;
+  const bodyTop = BOT - bodyH;
+  ctx.fillStyle = '#2a0a30';               // dark purple feet
+  ctx.fillRect(x + 2, BOT - 5, 7, 5);
+  ctx.fillRect(x + TILE - 9, BOT - 5, 7, 5);
+  if (!open) {
+    ctx.fillStyle = '#3a0818';             // deep crimson body
+    ctx.fillRect(x + 2, bodyTop, TILE - 4, bodyH);
+    ctx.fillStyle = '#8a2050';             // dark magenta trim
+    ctx.fillRect(x + 2, bodyTop + 3, TILE - 4, 2);
+    ctx.fillRect(x + 2, bodyTop + bodyH - 3, TILE - 4, 2);
+    ctx.fillRect(x + 2, bodyTop, 3, bodyH);
+    ctx.fillRect(x + TILE - 5, bodyTop, 3, bodyH);
+    ctx.fillStyle = '#2a0518';             // near-black lid
+    ctx.fillRect(x + 2, bodyTop - lidH, TILE - 4, lidH);
+    // Pulsing red gem lock (glows while sealed)
+    const pulse = 0.6 + 0.4 * Math.sin(tick * 0.08);
+    ctx.fillStyle = '#5a1030';
+    ctx.beginPath(); ctx.arc(x + 16, bodyTop + bodyH / 2, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.save();
+    ctx.globalAlpha = ENCOUNTERS.some(e => e.zombies.some(z => z.alive || z.deathTimer > 0)) ? pulse : 0.9;
+    ctx.fillStyle = '#ff2030';
+    ctx.beginPath(); ctx.arc(x + 16, bodyTop + bodyH / 2, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#3a0818';
+    ctx.fillRect(x + 2, bodyTop, TILE - 4, bodyH);
+    ctx.fillStyle = '#1a020c';
+    ctx.fillRect(x + 3, bodyTop + 6, TILE - 6, 2);
+    ctx.fillStyle = 'rgba(200,40,90,0.3)';
+    ctx.fillRect(x + 3, bodyTop, TILE - 6, 7);
+    _chestLid(x - 2, bodyTop, lidH + 7, '#2a0518', '#4a0c28', '#8a2050');
+    ctx.fillStyle = '#3a0818';
+    ctx.beginPath();
+    ctx.ellipse(x + 15, bodyTop - lidH - 2, 11, 5, 0, Math.PI, 0);
+    ctx.fill();
+  }
+}
+
+// Goblin guardian — short, stocky, pointy ears, amber eyes, snarl with tusks
+function drawZombie(g, zom) {
+  if (zom.type === 'zombie') { drawRegularZombie(g, zom); return; }
+  drawGoblin(g, zom);
+}
+
+function drawRegularZombie(g, zom) {
+  if (!zom.alive && zom.deathTimer <= 0) return;
+  const x = Math.round(zom.px + zom.knockX);
+  const y = Math.round(zom.py + zom.knockY);
+  const moving = zom.alive && (zom.state === 'chase' || zom.state === 'return');
+  const bob  = !zom.alive ? 0 : moving ? Math.sin(tick * 0.28) * 1.5 : Math.sin(tick * 0.06) * 1.0;
+  const step = moving ? Math.sin(tick * 0.38) * 2.5 : 0;
+  const dying = !zom.alive;
+  const dt = dying ? zom.deathTimer / ZOMBIE_DEATH_FRAMES : 1;
+  const flash = zom.hitFlash > 0;
+
+  g.save();
+  if (dying) {
+    g.globalAlpha = dt;
+    g.translate(x + 16, y + 32);
+    g.scale(1, Math.max(0.05, dt));
+    g.translate(-(x + 16), -(y + 32));
+  }
+
+  // Ground shadow
+  g.fillStyle = 'rgba(0,0,0,0.20)';
+  g.beginPath(); g.ellipse(x + 16, y + 31, 11, 3.5, 0, 0, Math.PI * 2); g.fill();
+
+  // Skin palette — pale greyish with decay tinge
+  const skinC = flash ? '#ffffff' : '#9aaa90';
+  const darkC = flash ? '#d0e8d0' : '#5a6855';
+  const ragC  = '#3a3230';   // tattered rags colour
+  const ragD  = '#221e1c';   // dark rag shadow
+
+  // ── Legs (shambling, slightly bent) ──────────────────────────────────────
+  g.fillStyle = ragC;
+  g.fillRect(x + 9,  y + 22 + bob + step * 0.7, 7, 9);
+  g.fillRect(x + 17, y + 22 + bob - step * 0.7, 7, 9);
+  g.fillStyle = ragD;
+  g.fillRect(x + 9,  y + 28 + bob + step * 0.7, 7, 3);
+  g.fillRect(x + 17, y + 28 + bob - step * 0.7, 7, 3);
+
+  // ── Torso — torn shirt ────────────────────────────────────────────────────
+  g.fillStyle = ragC;
+  g.fillRect(x + 8, y + 12 + bob, 16, 10);
+  // Tear lines on shirt
+  g.fillStyle = ragD;
+  g.fillRect(x + 11, y + 13 + bob, 1, 6);
+  g.fillRect(x + 16, y + 15 + bob, 1, 4);
+  g.fillRect(x + 20, y + 13 + bob, 1, 5);
+  // Exposed ribs peaking through
+  g.fillStyle = skinC;
+  g.fillRect(x + 7,  y + 13 + bob, 2, 7);
+  g.fillRect(x + 23, y + 13 + bob, 2, 7);
+  g.fillStyle = darkC;
+  g.fillRect(x + 8,  y + 14 + bob, 1, 1);
+  g.fillRect(x + 8,  y + 17 + bob, 1, 1);
+  g.fillRect(x + 23, y + 14 + bob, 1, 1);
+  g.fillRect(x + 23, y + 17 + bob, 1, 1);
+
+  // ── Arms outstretched (zombie pose) ───────────────────────────────────────
+  g.fillStyle = skinC;
+  // Left arm raised forward
+  g.fillRect(x - 2, y + 9 + bob, 11, 6);
+  g.fillRect(x - 4, y + 8 + bob, 7,  5);
+  // Right arm raised forward
+  g.fillRect(x + 23, y + 9 + bob, 11, 6);
+  g.fillRect(x + 29, y + 8 + bob, 7,  5);
+  // Hands / claw-like fingers
+  g.fillStyle = darkC;
+  g.fillRect(x - 5, y + 7 + bob, 4, 4);
+  g.fillRect(x + 33, y + 7 + bob, 4, 4);
+  // Finger tips
+  g.fillStyle = '#2a2018';
+  g.fillRect(x - 6, y + 6 + bob, 2, 2);
+  g.fillRect(x - 4, y + 5 + bob, 2, 2);
+  g.fillRect(x + 34, y + 6 + bob, 2, 2);
+  g.fillRect(x + 36, y + 5 + bob, 2, 2);
+
+  // ── Round head (no pointy ears) ───────────────────────────────────────────
+  g.fillStyle = skinC;
+  g.fillRect(x + 8, y + 0 + bob, 16, 13);
+  // Forehead wrinkles
+  g.fillStyle = darkC;
+  g.fillRect(x + 10, y + 2 + bob, 5, 1);
+  g.fillRect(x + 17, y + 2 + bob, 5, 1);
+
+  // ── Sunken hollow eyes (red glow) ─────────────────────────────────────────
+  const eyeC = flash ? '#ff8080' : '#dd1010';
+  // Eye sockets (dark)
+  g.fillStyle = '#1a1210';
+  g.fillRect(x + 9,  y + 3 + bob, 6, 5);
+  g.fillRect(x + 17, y + 3 + bob, 6, 5);
+  // Red glow inside
+  g.fillStyle = eyeC;
+  g.fillRect(x + 10, y + 4 + bob, 4, 3);
+  g.fillRect(x + 18, y + 4 + bob, 4, 3);
+  // Pupil void
+  g.fillStyle = '#000000';
+  g.fillRect(x + 11, y + 4 + bob, 2, 2);
+  g.fillRect(x + 19, y + 4 + bob, 2, 2);
+
+  // ── Nose — sunken stub ────────────────────────────────────────────────────
+  g.fillStyle = darkC;
+  g.fillRect(x + 14, y + 7 + bob, 3, 2);
+
+  // ── Open rotting mouth ────────────────────────────────────────────────────
+  g.fillStyle = '#0d0805';
+  g.fillRect(x + 9, y + 9 + bob, 14, 5);
+  // Broken teeth (uneven)
+  g.fillStyle = '#c8c0a0';
+  g.fillRect(x + 10, y + 9 + bob, 2, 3);
+  g.fillRect(x + 14, y + 9 + bob, 3, 2);
+  g.fillRect(x + 19, y + 9 + bob, 2, 3);
+  // Dark gaps between teeth
+  g.fillStyle = '#0d0805';
+  g.fillRect(x + 12, y + 9 + bob, 2, 2);
+  g.fillRect(x + 17, y + 9 + bob, 2, 1);
+
+  g.restore();
+
+  // HP bar
+  if (zom.alive && (zom.hp < zom.maxHp || zom.ghostHp > zom.hp + 0.01 || zom.state !== 'idle')) {
+    const bw = 36, bh = 5;
+    const bx = x + 16 - bw / 2, by = y - 13;
+    const label = settings.language !== 'en' ? '僵尸' : 'Zombie';
+    g.save();
+    roundRectPath(g, bx - 1, by - 1, bw + 2, bh + 2, (bh + 2) / 2);
+    g.fillStyle = 'rgba(0,0,0,0.6)'; g.fill();
+    g.strokeStyle = 'rgba(255,255,255,0.3)'; g.lineWidth = 0.8; g.stroke();
+    const gp = Math.max(0, zom.ghostHp / zom.maxHp);
+    const hp = zom.hp / zom.maxHp;
+    if (gp > hp) {
+      roundRectPath(g, bx, by, bw * gp, bh, bh / 2);
+      g.fillStyle = 'rgba(255,206,92,0.9)'; g.fill();
+    }
+    if (hp > 0) {
+      roundRectPath(g, bx, by, bw * hp, bh, bh / 2);
+      g.fillStyle = '#90e8a0'; g.fill();
+    }
+    g.font = 'bold 8px ' + UI_FONT;
+    g.textAlign = 'left'; g.textBaseline = 'bottom';
+    g.strokeStyle = 'rgba(0,0,0,0.8)'; g.lineWidth = 2;
+    g.strokeText(label, bx, by - 2);
+    g.fillStyle = '#90e8a0';
+    g.fillText(label, bx, by - 2);
+    g.restore();
+  }
+}
+
+function drawGoblin(g, zom) {
+  if (!zom.alive && zom.deathTimer <= 0) return;
+  const x = Math.round(zom.px + zom.knockX);
+  const y = Math.round(zom.py + zom.knockY);
+  const moving = zom.alive && (zom.state === 'chase' || zom.state === 'return');
+  const bob  = !zom.alive ? 0 : moving ? Math.sin(tick * 0.28) * 1.5 : Math.sin(tick * 0.06) * 1.0;
+  const step = moving ? Math.sin(tick * 0.38) * 2.5 : 0;
+  const dying = !zom.alive;
+  const dt = dying ? zom.deathTimer / ZOMBIE_DEATH_FRAMES : 1;
+
+  g.save();
+  if (dying) {
+    g.globalAlpha = dt;
+    g.translate(x + 16, y + 32);
+    g.scale(1, Math.max(0.05, dt));
+    g.translate(-(x + 16), -(y + 32));
+  }
+
+  const winding = zom.alive && zom.state === 'windup';
+  if (winding) {
+    const wt = 1 - zom.windup / ZOMBIE_WINDUP_FRAMES;
+    g.translate(x + 16, y + 32);
+    g.scale(1 + wt * 0.14, 1 + wt * 0.14);
+    g.translate(-(x + 16), -(y + 32));
+  }
+  const rage = winding && Math.floor(tick / 3) % 2 === 0;
+
+  const flash = zom.hitFlash > 0;
+  // Skin palette — goblin green
+  const skinC  = flash ? (zom.hitFlash % 4 < 2 ? '#ffffff' : '#b8ffb0') : rage ? '#90e858' : '#52a828';
+  const darkC  = flash ? '#d0ffd0' : rage ? '#3aaa10' : '#2a6812';
+  const liteC  = flash ? '#ffffff' : '#78d04a';
+  const clothC = rage ? '#a06010' : '#7a5020';
+  const darkCl = '#4a2e0c';
+
+  // Ground shadow
+  g.fillStyle = 'rgba(0,0,0,0.20)';
+  g.beginPath(); g.ellipse(x + 16, y + 31, 11, 3.5, 0, 0, Math.PI * 2); g.fill();
+
+  // ── Legs ─────────────────────────────────────────────────────────────────
+  g.fillStyle = darkC;
+  g.fillRect(x + 8,  y + 22 + bob + step, 7, 9); // left leg
+  g.fillRect(x + 17, y + 22 + bob - step, 7, 9); // right leg
+  // Boot tips
+  g.fillStyle = '#1a3e0a';
+  g.fillRect(x + 8,  y + 28 + bob + step, 7, 3);
+  g.fillRect(x + 17, y + 28 + bob - step, 7, 3);
+
+  // ── Torso (cloth) ─────────────────────────────────────────────────────────
+  g.fillStyle = clothC;
+  g.fillRect(x + 8, y + 12 + bob, 16, 11);
+  // Belt stripe
+  g.fillStyle = darkCl;
+  g.fillRect(x + 8, y + 19 + bob, 16, 2);
+  // Buckle
+  g.fillStyle = '#c8a030';
+  g.fillRect(x + 14, y + 19 + bob, 4, 2);
+  // Skin on sides of torso
+  g.fillStyle = skinC;
+  g.fillRect(x + 7,  y + 13 + bob, 2, 7);
+  g.fillRect(x + 23, y + 13 + bob, 2, 7);
+
+  // ── Arms ──────────────────────────────────────────────────────────────────
+  g.fillStyle = skinC;
+  g.fillRect(x + 2, y + 13 + bob, 7, 10); // left arm
+  g.fillRect(x + 23, y + 13 + bob, 7, 10); // right arm
+  g.fillStyle = darkC;
+  g.fillRect(x + 2, y + 21 + bob, 7, 3); // left fist
+  g.fillRect(x + 23, y + 21 + bob, 7, 3); // right fist
+  // Claw tips
+  g.fillStyle = '#1a3e0a';
+  g.fillRect(x + 2,  y + 23 + bob, 2, 2);
+  g.fillRect(x + 5,  y + 23 + bob, 2, 2);
+  g.fillRect(x + 23, y + 23 + bob, 2, 2);
+  g.fillRect(x + 26, y + 23 + bob, 2, 2);
+
+  // ── Pointy left ear ───────────────────────────────────────────────────────
+  g.fillStyle = skinC;
+  g.beginPath();
+  g.moveTo(x + 7,  y - 2 + bob); // tip
+  g.lineTo(x + 7,  y + 7 + bob); // bottom
+  g.lineTo(x + 11, y + 5 + bob); // base inner
+  g.closePath(); g.fill();
+  g.fillStyle = '#d87070'; // pink inner ear
+  g.beginPath();
+  g.moveTo(x + 8,  y + 0 + bob);
+  g.lineTo(x + 8,  y + 5 + bob);
+  g.lineTo(x + 10, y + 4 + bob);
+  g.closePath(); g.fill();
+
+  // ── Pointy right ear ──────────────────────────────────────────────────────
+  g.fillStyle = skinC;
+  g.beginPath();
+  g.moveTo(x + 25, y - 2 + bob);
+  g.lineTo(x + 25, y + 7 + bob);
+  g.lineTo(x + 21, y + 5 + bob);
+  g.closePath(); g.fill();
+  g.fillStyle = '#d87070';
+  g.beginPath();
+  g.moveTo(x + 24, y + 0 + bob);
+  g.lineTo(x + 24, y + 5 + bob);
+  g.lineTo(x + 22, y + 4 + bob);
+  g.closePath(); g.fill();
+
+  // ── Head ──────────────────────────────────────────────────────────────────
+  g.fillStyle = skinC;
+  g.fillRect(x + 7, y + 0 + bob, 18, 13); // main head block
+  // Mottled skin texture
+  g.fillStyle = darkC;
+  g.fillRect(x + 8,  y + 1 + bob, 2, 2);
+  g.fillRect(x + 22, y + 1 + bob, 2, 2);
+  g.fillRect(x + 14, y + 10 + bob, 2, 2);
+  g.fillStyle = liteC;
+  g.fillRect(x + 17, y + 2 + bob, 2, 2);
+  g.fillRect(x + 10, y + 7 + bob, 2, 2);
+
+  // ── Angry brows ───────────────────────────────────────────────────────────
+  g.fillStyle = darkC;
+  g.fillRect(x + 8,  y + 1 + bob, 6, 2); // left brow (angled — outer lower)
+  g.fillRect(x + 9,  y + 2 + bob, 4, 1); // extra thickness
+  g.fillRect(x + 18, y + 1 + bob, 6, 2); // right brow
+  g.fillRect(x + 19, y + 2 + bob, 4, 1);
+
+  // ── Eyes ──────────────────────────────────────────────────────────────────
+  const eyeC = rage ? '#ff5010' : '#ffbe10';
+  g.fillStyle = eyeC;
+  g.fillRect(x + 9,  y + 3 + bob, 5, 4); // left eye glow
+  g.fillRect(x + 18, y + 3 + bob, 5, 4); // right eye glow
+  g.fillStyle = '#120c00';                 // pupils
+  g.fillRect(x + 11, y + 4 + bob, 2, 3);
+  g.fillRect(x + 20, y + 4 + bob, 2, 3);
+  // Eye shine
+  g.fillStyle = 'rgba(255,255,220,0.7)';
+  g.fillRect(x + 9,  y + 3 + bob, 1, 1);
+  g.fillRect(x + 18, y + 3 + bob, 1, 1);
+
+  // ── Nose ──────────────────────────────────────────────────────────────────
+  g.fillStyle = darkC;
+  g.fillRect(x + 14, y + 6 + bob, 4, 2);
+  g.fillRect(x + 13, y + 7 + bob, 6, 2);
+
+  // ── Mouth & tusks ─────────────────────────────────────────────────────────
+  g.fillStyle = '#1a0e00'; // mouth cavity
+  g.fillRect(x + 9, y + 9 + bob, 14, 4);
+  // Upper teeth (jagged top row)
+  g.fillStyle = '#ece8c0';
+  g.fillRect(x + 10, y + 9  + bob, 2, 3);
+  g.fillRect(x + 13, y + 9  + bob, 2, 2);
+  g.fillRect(x + 16, y + 9  + bob, 2, 3);
+  g.fillRect(x + 19, y + 9  + bob, 2, 2);
+  // Protruding goblin tusks (bottom canines sticking up from lower jaw)
+  g.fillStyle = '#f8f4d0';
+  g.fillRect(x + 10, y + 12 + bob, 3, 4); // left tusk
+  g.fillRect(x + 19, y + 12 + bob, 3, 4); // right tusk
+  // Tusk tips slightly yellow-ivory
+  g.fillStyle = '#ddd070';
+  g.fillRect(x + 10, y + 14 + bob, 3, 2);
+  g.fillRect(x + 19, y + 14 + bob, 3, 2);
+
+  g.restore();
+
+  // Genshin-style enemy HP bar: dark capsule, white fill, yellow "recent damage" ghost
+  if (zom.alive && (zom.hp < zom.maxHp || zom.ghostHp > zom.hp + 0.01 || zom.state !== 'idle')) {
+    const bw = 36, bh = 5;
+    const bx = x + 16 - bw / 2, by = y - 13;
+    g.save();
+    roundRectPath(g, bx - 1, by - 1, bw + 2, bh + 2, (bh + 2) / 2);
+    g.fillStyle = 'rgba(0,0,0,0.6)'; g.fill();
+    g.strokeStyle = 'rgba(255,255,255,0.3)'; g.lineWidth = 0.8; g.stroke();
+    const gp = Math.max(0, zom.ghostHp / zom.maxHp);
+    const hp = zom.hp / zom.maxHp;
+    if (gp > hp) {
+      roundRectPath(g, bx, by, bw * gp, bh, bh / 2);
+      g.fillStyle = 'rgba(255,206,92,0.9)'; g.fill();
+    }
+    if (hp > 0) {
+      roundRectPath(g, bx, by, bw * hp, bh, bh / 2);
+      g.fillStyle = '#f2f6f2'; g.fill();
+    }
+    g.font = 'bold 8px ' + UI_FONT;
+    g.textAlign = 'left'; g.textBaseline = 'bottom';
+    g.strokeStyle = 'rgba(0,0,0,0.8)'; g.lineWidth = 2;
+    const label = settings.language !== 'en' ? '地精' : 'Goblin';
+    g.strokeText(label, bx, by - 2);
+    g.fillStyle = '#fff';
+    g.fillText(label, bx, by - 2);
+    g.restore();
+  }
+  // defDown debuff indicator — purple ring under feet
+  if (zom.alive && zom.defDown > 0) {
+    const pulse = 0.5 + 0.5 * Math.sin(tick * 0.18);
+    g.save();
+    g.globalAlpha = 0.55 + pulse * 0.35;
+    g.strokeStyle = '#c060ff';
+    g.lineWidth = 2;
+    g.beginPath(); g.ellipse(x + 16, y + 30, 13, 4, 0, 0, Math.PI * 2); g.stroke();
+    g.restore();
+  }
+}
+
+function drawCreeper(g, crp) {
+  if (!crp.alive && crp.deathTimer <= 0) return;
+  const x = Math.round(crp.px + crp.knockX);
+  const y = Math.round(crp.py + crp.knockY);
+  const moving = crp.alive && (crp.state === 'chase' || crp.state === 'return');
+  const bob  = !crp.alive ? 0 : moving ? Math.sin(tick * 0.35) * 1.2 : Math.sin(tick * 0.07) * 0.8;
+  const step = moving ? Math.sin(tick * 0.45) * 1.8 : 0;
+  const dying = !crp.alive;
+  const dt = dying ? crp.deathTimer / ZOMBIE_DEATH_FRAMES : 1;
+  const winding = crp.alive && crp.state === 'windup';
+  const flash = crp.hitFlash > 0;
+  const explodeFlash = winding && Math.floor(tick / 4) % 2 === 0;
+
+  g.save();
+  if (dying) {
+    g.globalAlpha = dt;
+    g.translate(x + 16, y + 32);
+    g.scale(1, Math.max(0.05, dt));
+    g.translate(-(x + 16), -(y + 32));
+  }
+  if (winding) {
+    const wt = 1 - crp.windup / CREEPER_WINDUP_FRAMES;
+    g.translate(x + 16, y + 32);
+    g.scale(1 + wt * 0.18, 1 + wt * 0.18);
+    g.translate(-(x + 16), -(y + 32));
+  }
+
+  // Ground shadow
+  g.fillStyle = 'rgba(0,0,0,0.20)';
+  g.beginPath(); g.ellipse(x + 16, y + 31, 9, 3, 0, 0, Math.PI * 2); g.fill();
+
+  const bodyC = flash ? '#ffffff' : explodeFlash ? '#e8ffe8' : '#3a8a20';
+  const darkC = flash ? '#ccffcc' : explodeFlash ? '#a0dda0' : '#206010';
+
+  // ── Legs (4 small legs) ───────────────────────────────────────────────────
+  g.fillStyle = darkC;
+  g.fillRect(x + 9,  y + 22 + bob + step, 5, 7);
+  g.fillRect(x + 18, y + 22 + bob - step, 5, 7);
+  g.fillStyle = bodyC;
+  g.fillRect(x + 10, y + 22 + bob + step * 0.5, 4, 6);
+  g.fillRect(x + 18, y + 22 + bob - step * 0.5, 4, 6);
+
+  // ── Torso (no arms — classic creeper shape) ────────────────────────────────
+  g.fillStyle = bodyC;
+  g.fillRect(x + 10, y + 13 + bob, 12, 10);
+  g.fillStyle = darkC;
+  g.fillRect(x + 10, y + 20 + bob, 12, 3);
+  // Scale bumps
+  g.fillRect(x + 12, y + 14 + bob, 2, 2);
+  g.fillRect(x + 17, y + 16 + bob, 2, 2);
+
+  // ── Head (square, Minecraft style) ────────────────────────────────────────
+  g.fillStyle = bodyC;
+  g.fillRect(x + 8, y + 1 + bob, 16, 14);
+  g.fillStyle = darkC;
+  g.fillRect(x + 8, y + 1 + bob, 16, 2); // top shadow
+
+  // Two square black eyes
+  g.fillStyle = '#0a0a0a';
+  g.fillRect(x + 10, y + 4 + bob, 5, 4);
+  g.fillRect(x + 17, y + 4 + bob, 5, 4);
+  // Eye shine
+  g.fillStyle = 'rgba(255,255,255,0.3)';
+  g.fillRect(x + 10, y + 4 + bob, 1, 1);
+  g.fillRect(x + 17, y + 4 + bob, 1, 1);
+
+  // Creeper mouth (drooping sad pattern)
+  g.fillStyle = '#0a0a0a';
+  g.fillRect(x + 10, y + 9  + bob, 3, 5);  // left droop
+  g.fillRect(x + 13, y + 12 + bob, 6, 3);  // bottom bridge
+  g.fillRect(x + 19, y + 9  + bob, 3, 5);  // right droop
+  // Inner mouth cavity
+  g.fillStyle = darkC;
+  g.fillRect(x + 11, y + 10 + bob, 2, 3);
+  g.fillRect(x + 19, y + 10 + bob, 2, 3);
+
+  g.restore();
+
+  // HP bar (smaller than goblin)
+  if (crp.alive && (crp.hp < crp.maxHp || crp.ghostHp > crp.hp + 0.01 || crp.state !== 'idle')) {
+    const bw = 28, bh = 4;
+    const bx = x + 16 - bw / 2, by = y - 10;
+    const label = settings.language !== 'en' ? '苦力怕' : 'Creeper';
+    g.save();
+    roundRectPath(g, bx - 1, by - 1, bw + 2, bh + 2, (bh + 2) / 2);
+    g.fillStyle = 'rgba(0,0,0,0.6)'; g.fill();
+    g.strokeStyle = 'rgba(255,255,255,0.3)'; g.lineWidth = 0.8; g.stroke();
+    const gp = Math.max(0, crp.ghostHp / crp.maxHp);
+    const hp = crp.hp / crp.maxHp;
+    if (gp > hp) {
+      roundRectPath(g, bx, by, bw * gp, bh, bh / 2);
+      g.fillStyle = 'rgba(255,206,92,0.9)'; g.fill();
+    }
+    if (hp > 0) {
+      roundRectPath(g, bx, by, bw * hp, bh, bh / 2);
+      g.fillStyle = '#60dd30'; g.fill();
+    }
+    g.font = 'bold 7px ' + UI_FONT;
+    g.textAlign = 'left'; g.textBaseline = 'bottom';
+    g.strokeStyle = 'rgba(0,0,0,0.8)'; g.lineWidth = 2;
+    g.strokeText(label, bx, by - 1);
+    g.fillStyle = '#60dd30';
+    g.fillText(label, bx, by - 1);
+    g.restore();
+  }
+  // defDown debuff indicator
+  if (crp.alive && crp.defDown > 0) {
+    const pulse = 0.5 + 0.5 * Math.sin(tick * 0.18);
+    g.save();
+    g.globalAlpha = 0.55 + pulse * 0.35;
+    g.strokeStyle = '#c060ff';
+    g.lineWidth = 2;
+    g.beginPath(); g.ellipse(x + 16, y + 30, 10, 3.5, 0, 0, Math.PI * 2); g.stroke();
+    g.restore();
+  }
+}
+
+// World-space scene: ring under chest, chest, zombie (called before tree overlay)
+function drawCombatScene() {
+  drawSealRing(ctx);
+  for (const enc of ENCOUNTERS) {
+    const chestGone = enc.chest.open && enc.chest.disappearTimer <= 0;
+    if (!chestGone) {
+      const alpha = (enc.chest.open && enc.chest.disappearTimer <= 60)
+        ? enc.chest.disappearTimer / 60 : 1;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      if (enc.chest.unsealed) {
+        // Seal broken — chest reverts to its normal splendid/precious appearance
+        drawChestByType(enc.loot, enc.chest.col * TILE, enc.chest.row * TILE, enc.chest.open);
+      } else {
+        drawSealedChest(enc.chest.col * TILE, enc.chest.row * TILE, enc.chest.open);
+      }
+      ctx.restore();
+    }
+    for (const zom of enc.zombies) drawZombie(ctx, zom);
+  }
+  for (const crp of CREEPERS) drawCreeper(ctx, crp);
+}
+
+// Arc slash sweeping across the player's facing direction
+function drawAttackSwing(g) {
+  if (combat.attackAnim <= 0) return;
+  const t = 1 - combat.attackAnim / ATTACK_ANIM_FRAMES; // 0 → 1
+  const cx = player.px + 16, cy = player.py + 16;
+  const base = combat.attackFacing === 'right' ? 0 :
+               combat.attackFacing === 'down'  ? Math.PI / 2 :
+               combat.attackFacing === 'left'  ? Math.PI : -Math.PI / 2;
+  const sweep = -0.9 + t * 1.8;
+  g.save();
+  g.globalAlpha = (1 - t) * 0.9;
+  g.lineCap = 'round';
+  for (const [rr, lw, col] of [[24, 5, 'rgba(255,255,255,0.95)'], [20, 3, 'rgba(255,216,77,0.9)']]) {
+    g.strokeStyle = col; g.lineWidth = lw;
+    g.beginPath();
+    g.arc(cx, cy, rr, base + sweep - 0.55, base + sweep + 0.55);
+    g.stroke();
+  }
+  g.restore();
+}
+
+// E skill: directed energy beam (same visual as the old Q beam)
+function drawESkillEffect(g) {
+  if (combat.eSkillAnim <= 0) return;
+  const t = 1 - combat.eSkillAnim / ULT_ANIM_FRAMES;
+  const cx = player.px + 16, cy = player.py + 16;
+  const [fx, fy] = _facingVec(combat.eSkillFacing);
+  g.save();
+  g.globalAlpha = (1 - t) * 0.8;
+  g.strokeStyle = '#ffd84d'; g.lineWidth = 4;
+  g.beginPath(); g.arc(cx, cy, 10 + t * TILE * 2.2, 0, Math.PI * 2); g.stroke();
+  g.strokeStyle = 'rgba(255,255,255,0.9)'; g.lineWidth = 2;
+  g.beginPath(); g.arc(cx, cy, 6 + t * TILE * 1.6, 0, Math.PI * 2); g.stroke();
+  const len = TILE * 3.5 * Math.min(1, t * 2.5);
+  const ex = cx + fx * len, ey = cy + fy * len;
+  const pxp = -fy, pyp = fx;
+  const w0 = 6, w1 = TILE * (0.9 - t * 0.35) / 2;
+  const grad = g.createLinearGradient(cx, cy, ex, ey);
+  grad.addColorStop(0,   'rgba(255,246,190,0.95)');
+  grad.addColorStop(0.6, 'rgba(255,190,60,0.75)');
+  grad.addColorStop(1,   'rgba(255,120,30,0)');
+  g.globalAlpha = 1 - t;
+  g.fillStyle = grad;
+  g.beginPath();
+  g.moveTo(cx + pxp * w0, cy + pyp * w0);
+  g.lineTo(ex + pxp * w1, ey + pyp * w1);
+  g.lineTo(ex - pxp * w1, ey - pyp * w1);
+  g.lineTo(cx - pxp * w0, cy - pyp * w0);
+  g.closePath();
+  g.fill();
+  g.restore();
+}
+
+// Q ultimate: full circular shockwave that expands outward
+function drawUltEffect(g) {
+  if (combat.ultAnim <= 0) return;
+  const t = 1 - combat.ultAnim / ULT_ANIM_FRAMES;
+  const cx = player.px + 16, cy = player.py + 16;
+  const ease = Math.pow(t, 0.55);          // fast early, slows near edge
+  const maxR  = TILE * 3.5;
+  const r     = maxR * ease;
+  g.save();
+  // Inner radial glow (fades as ring expands outward)
+  g.globalAlpha = (1 - t) * 0.45;
+  const ig = g.createRadialGradient(cx, cy, 0, cx, cy, r);
+  ig.addColorStop(0,   'rgba(255,246,190,0.9)');
+  ig.addColorStop(0.5, 'rgba(255,180,40,0.5)');
+  ig.addColorStop(1,   'rgba(255,120,30,0)');
+  g.fillStyle = ig;
+  g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill();
+  // Thick gold shockwave ring
+  g.globalAlpha = (1 - t) * 0.9;
+  g.strokeStyle = '#ffd84d'; g.lineWidth = 10 * (1 - t * 0.5);
+  g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke();
+  // Sharp white leading edge
+  g.globalAlpha = (1 - t) * 0.95;
+  g.strokeStyle = '#ffffff'; g.lineWidth = 3;
+  g.beginPath(); g.arc(cx, cy, r + 4, 0, Math.PI * 2); g.stroke();
+  // Secondary inner ring (trails behind)
+  if (t > 0.15) {
+    g.globalAlpha = (1 - t) * 0.5;
+    g.strokeStyle = 'rgba(255,220,100,0.8)'; g.lineWidth = 5;
+    g.beginPath(); g.arc(cx, cy, r * 0.65, 0, Math.PI * 2); g.stroke();
+  }
+  g.restore();
+}
+
+// Combat particles + floating damage numbers (world space, drawn above trees)
+function drawCombatParticles(g) {
+  if (combat.particles.length) {
+    g.save();
+    for (const p of combat.particles) {
+      g.globalAlpha = Math.max(0, p.life * 0.9);
+      g.fillStyle = p.color;
+      const s = Math.max(0.5, p.size * p.life);
+      if (p.square) g.fillRect(p.x - s / 2, p.y - s / 2, s, s);
+      else { g.beginPath(); g.arc(p.x, p.y, s, 0, Math.PI * 2); g.fill(); }
+    }
+    g.restore();
+  }
+  if (combat.floatTexts.length) {
+    g.save();
+    g.font = 'bold 13px ' + UI_FONT;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    for (const ft of combat.floatTexts) {
+      g.globalAlpha = Math.max(0, ft.life);
+      g.strokeStyle = 'rgba(0,0,0,0.7)'; g.lineWidth = 3;
+      g.strokeText(ft.text, ft.x, ft.y);
+      g.fillStyle = ft.color;
+      g.fillText(ft.text, ft.x, ft.y);
+    }
+    g.restore();
+  }
+}
+
+function drawCombatFX(g) {
+  drawAttackSwing(g);
+  drawESkillEffect(g);
+  drawUltEffect(g);
+  drawCombatParticles(g);
+}
+
+// Compass arrow pointing toward the nearest unsealed guarded chest
+function drawChestCompass() {
+  if (fishingOpen || cookingMinigame) return;
+  const px = player.px + 16, py = player.py + 16;
+  // Find closest encounter whose chest hasn't been unsealed yet
+  let bestEnc = null, bestDist = Infinity;
+  for (const enc of ENCOUNTERS) {
+    if (enc.chest.unsealed) continue;
+    const d = Math.hypot(enc.chest.col * TILE + 16 - px, enc.chest.row * TILE + 16 - py);
+    if (d < bestDist) { bestDist = d; bestEnc = enc; }
+  }
+  if (!bestEnc || bestDist < TILE * 3) return;
+  const tx = bestEnc.chest.col * TILE + 16, ty = bestEnc.chest.row * TILE + 16;
+  const dist  = bestDist;
+  const angle = Math.atan2(ty - py, tx - px);
+  // Draw in screen space: a small red arrow at the top-centre of the screen
+  const sx = canvas.width / 2, sy = 38;
+  const pulse = 0.7 + 0.3 * Math.sin(tick * 0.08);
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.rotate(angle - Math.PI / 2); // rotate to point toward chest
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = '#ff2030';
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(0, -14);
+  ctx.lineTo(7, 7);
+  ctx.lineTo(0, 3);
+  ctx.lineTo(-7, 7);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+  // Distance label
+  const tiles = Math.round(dist / TILE);
+  ctx.save();
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = '#ff2030';
+  ctx.font = 'bold 12px ' + UI_FONT;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('⚔ ' + tiles + 't', sx, sy + 18);
+  ctx.restore();
+}
+
+// Energy gauge — Genshin-style water-fill orb (Q) + E skill CD circle
+function drawEnergyBar() {
+  if (ENCOUNTERS.every(e => e.zombies.every(z => !z.alive && z.deathTimer <= 0)) &&
+      CREEPERS.every(c => !c.alive && c.deathTimer <= 0) && combat.energy <= 0) return;
+  if (fishingOpen || cookingMinigame) return;
+
+  const zh    = settings.language !== 'en';
+  const full  = combat.energy >= ENERGY_MAX;
+  const frac  = combat.energy / ENERGY_MAX;
+  const pulse = 0.5 + 0.5 * Math.sin(tick * 0.10);
+
+  // Layout anchors — bottom-right corner
+  const ORB_R  = 46;          // Q orb radius
+  const RING_R = ORB_R + 7;  // outer progress-ring radius
+  const PAD    = 20;
+  const orbX   = canvas.width  - RING_R - PAD;
+  const orbY   = canvas.height - RING_R - PAD;
+
+  ctx.save();
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+
+  // ── 1. Ambient glow (full only) ───────────────────────────────────────────
+  if (full) {
+    ctx.save();
+    ctx.globalAlpha = 0.25 + pulse * 0.20;
+    const gl = ctx.createRadialGradient(orbX, orbY, 0, orbX, orbY, RING_R * 2.2);
+    gl.addColorStop(0, '#ffd84d');
+    gl.addColorStop(1, 'rgba(255,216,77,0)');
+    ctx.fillStyle = gl;
+    ctx.beginPath(); ctx.arc(orbX, orbY, RING_R * 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  // ── 2. Outer progress ring ────────────────────────────────────────────────
+  // Background track
+  ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+  ctx.lineWidth   = 5;
+  ctx.beginPath(); ctx.arc(orbX, orbY, RING_R, 0, Math.PI * 2); ctx.stroke();
+  // Fill arc (sweeps clockwise from top)
+  if (frac > 0) {
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 5;
+    if (full) {
+      ctx.strokeStyle = `rgba(255,216,77,${0.75 + pulse * 0.25})`;
+    } else {
+      const rg = ctx.createLinearGradient(orbX - RING_R, orbY, orbX + RING_R, orbY);
+      rg.addColorStop(0, 'rgba(60,140,255,0.9)');
+      rg.addColorStop(1, 'rgba(120,200,255,0.9)');
+      ctx.strokeStyle = rg;
+    }
+    ctx.beginPath();
+    ctx.arc(orbX, orbY, RING_R, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ── 3. Orb dark background ────────────────────────────────────────────────
+  ctx.beginPath(); ctx.arc(orbX, orbY, ORB_R, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(6,8,18,0.92)'; ctx.fill();
+
+  // ── 4. Water fill (clipped to orb) ───────────────────────────────────────
+  ctx.save();
+  ctx.beginPath(); ctx.arc(orbX, orbY, ORB_R - 1, 0, Math.PI * 2); ctx.clip();
+
+  if (frac > 0) {
+    // water surface Y: bottom of orb when empty, top when full
+    const surfY  = orbY + ORB_R - ORB_R * 2 * frac;
+    const amp    = full ? 1.0 : 3.5;
+    const freq   = 0.10;
+    const phase  = tick * 0.06;
+    const phase2 = tick * 0.04;
+
+    // Draw wave shape, filled down to the bottom of the orb
+    ctx.beginPath();
+    ctx.moveTo(orbX - ORB_R, surfY);
+    for (let dx = -ORB_R; dx <= ORB_R; dx++) {
+      const wy = surfY
+        + Math.sin(dx * freq + phase)          * amp
+        + Math.sin(dx * freq * 1.7 + phase2)  * amp * 0.4;
+      ctx.lineTo(orbX + dx, wy);
+    }
+    ctx.lineTo(orbX + ORB_R, orbY + ORB_R);
+    ctx.lineTo(orbX - ORB_R, orbY + ORB_R);
+    ctx.closePath();
+
+    if (full) {
+      const wg = ctx.createLinearGradient(0, surfY, 0, orbY + ORB_R);
+      wg.addColorStop(0, `rgba(255,235,100,${0.85 + pulse * 0.15})`);
+      wg.addColorStop(0.5, 'rgba(255,180,30,0.88)');
+      wg.addColorStop(1,   'rgba(220,100,10,0.90)');
+      ctx.fillStyle = wg;
+    } else {
+      const wg = ctx.createLinearGradient(0, surfY, 0, orbY + ORB_R);
+      wg.addColorStop(0, 'rgba(100,185,255,0.80)');
+      wg.addColorStop(0.5, 'rgba(50,120,240,0.88)');
+      wg.addColorStop(1,   'rgba(20,60,200,0.92)');
+      ctx.fillStyle = wg;
+    }
+    ctx.fill();
+
+    // Thin bright highlight line along wave surface
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    ctx.strokeStyle = full ? 'rgba(255,255,200,0.9)' : 'rgba(180,230,255,0.9)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(orbX - ORB_R, surfY);
+    for (let dx = -ORB_R; dx <= ORB_R; dx++) {
+      const wy = surfY
+        + Math.sin(dx * freq + phase)         * amp
+        + Math.sin(dx * freq * 1.7 + phase2) * amp * 0.4;
+      ctx.lineTo(orbX + dx, wy);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore(); // end clip
+
+  // ── 5. Glass dome (top-left sheen) ───────────────────────────────────────
+  ctx.save();
+  ctx.beginPath(); ctx.arc(orbX, orbY, ORB_R, 0, Math.PI * 2); ctx.clip();
+  const dome = ctx.createRadialGradient(
+    orbX - ORB_R * 0.30, orbY - ORB_R * 0.35, 0,
+    orbX - ORB_R * 0.10, orbY - ORB_R * 0.05, ORB_R * 0.85);
+  dome.addColorStop(0,   'rgba(255,255,255,0.30)');
+  dome.addColorStop(0.45,'rgba(255,255,255,0.06)');
+  dome.addColorStop(1,   'rgba(255,255,255,0)');
+  ctx.fillStyle = dome;
+  ctx.fillRect(orbX - ORB_R, orbY - ORB_R, ORB_R * 2, ORB_R);  // top half only
+  ctx.restore();
+
+  // ── 6. Orb rim ────────────────────────────────────────────────────────────
+  ctx.beginPath(); ctx.arc(orbX, orbY, ORB_R, 0, Math.PI * 2);
+  ctx.strokeStyle = full
+    ? `rgba(255,220,80,${0.60 + pulse * 0.40})`
+    : 'rgba(80,140,255,0.40)';
+  ctx.lineWidth = 2; ctx.stroke();
+
+  // ── 7. Q label + energy text ──────────────────────────────────────────────
+  if (full) {
+    // Big glowing Q
+    ctx.font = `bold 26px ${UI_FONT}`;
+    ctx.shadowColor  = '#ffd84d';
+    ctx.shadowBlur   = 12 + pulse * 8;
+    ctx.fillStyle    = `rgba(255,248,120,${0.90 + pulse * 0.10})`;
+    ctx.fillText('Q', orbX, orbY - 6);
+    ctx.shadowBlur = 0;
+    ctx.font = `700 10px ${UI_FONT}`;
+    ctx.fillStyle = `rgba(255,240,80,${0.55 + pulse * 0.45})`;
+    ctx.fillText(zh ? '大招！' : 'BURST!', orbX, orbY + 13);
+  } else {
+    ctx.font = `bold 22px ${UI_FONT}`;
+    ctx.fillStyle = frac > 0 ? 'rgba(210,230,255,0.85)' : 'rgba(160,180,220,0.55)';
+    ctx.fillText('Q', orbX, orbY - 8);
+    ctx.font = `600 11px ${UI_FONT}`;
+    ctx.fillStyle = 'rgba(140,170,220,0.70)';
+    ctx.fillText(`${combat.energy}/${ENERGY_MAX}`, orbX, orbY + 11);
+  }
+
+  // ── 8. E skill CD circle (left of Q orb) ─────────────────────────────────
+  const eReady = combat.eSkillCooldown <= 0;
+  const eR  = 24;
+  const eX  = orbX - RING_R - eR - 10;
+  const eY  = orbY;
+
+  // Dark base
+  ctx.beginPath(); ctx.arc(eX, eY, eR + 3, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(6,8,18,0.88)'; ctx.fill();
+
+  if (eReady) {
+    const ep = 0.5 + 0.5 * Math.sin(tick * 0.14);
+    // Fill tint
+    ctx.beginPath(); ctx.arc(eX, eY, eR, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(60,200,110,${0.15 + ep * 0.12})`; ctx.fill();
+    // Pulsing rim
+    ctx.strokeStyle = `rgba(80,235,140,${0.55 + ep * 0.45})`; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(eX, eY, eR, 0, Math.PI * 2); ctx.stroke();
+    // E label
+    ctx.font = `bold 18px ${UI_FONT}`;
+    ctx.shadowColor = '#60ff90'; ctx.shadowBlur = 8 * ep;
+    ctx.fillStyle = '#90ffb8';
+    ctx.fillText('E', eX, eY + 1);
+    ctx.shadowBlur = 0;
+  } else {
+    const doneFrac = 1 - combat.eSkillCooldown / E_SKILL_CD_FRAMES;
+    // Dark fill + grey track
+    ctx.beginPath(); ctx.arc(eX, eY, eR, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(18,20,32,0.80)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(eX, eY, eR - 2, 0, Math.PI * 2); ctx.stroke();
+    // Blue progress arc
+    ctx.strokeStyle = 'rgba(100,165,255,0.88)'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(eX, eY, eR - 2, -Math.PI / 2, -Math.PI / 2 + doneFrac * Math.PI * 2);
+    ctx.stroke();
+    // Countdown number
+    const secsLeft = Math.ceil(combat.eSkillCooldown / 60);
+    ctx.font = `bold 15px ${UI_FONT}`;
+    ctx.fillStyle = 'rgba(160,200,255,0.90)';
+    ctx.fillText(secsLeft, eX, eY - 2);
+    ctx.font = `bold 8px ${UI_FONT}`;
+    ctx.fillStyle = 'rgba(120,140,175,0.60)';
+    ctx.fillText('E', eX, eY + eR - 9);
+  }
+
+  ctx.restore();
+}
+
+// Player HP — Genshin-style capsule bar, bottom-centre of the screen
+function drawPlayerHpBar() {
+  const inFight = ENCOUNTERS.some(e => e.zombies.some(z => z.alive || z.deathTimer > 0)) ||
+                  CREEPERS.some(c => c.alive || c.deathTimer > 0) || combat.energy > 0;
+  if (!inFight && combat.playerHp >= PLAYER_MAX_HP && combat.respawnTimer <= 0) return;
+  if (fishingOpen || cookingMinigame) return;
+  const w = 300, h = 13;
+  const x = (canvas.width - w) / 2, y = canvas.height - 34;
+  const pct  = combat.playerHp / PLAYER_MAX_HP;
+  const gpct = combat.playerGhostHp / PLAYER_MAX_HP;
+  const low = pct <= 0.2 && pct > 0;
+  const pulse = 0.5 + 0.5 * Math.sin(tick * 0.15);
+  ctx.save();
+  // Dark backing capsule with a thin light border (pulses red when low)
+  roundRectPath(ctx, x - 2, y - 2, w + 4, h + 4, (h + 4) / 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fill();
+  ctx.strokeStyle = low ? `rgba(255,80,70,${0.5 + pulse * 0.5})` : 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 1.5; ctx.stroke();
+  // Recent-damage ghost (yellow segment that drains after a hit)
+  if (gpct > pct) {
+    roundRectPath(ctx, x, y, w * gpct, h, h / 2);
+    ctx.fillStyle = 'rgba(255,206,92,0.85)'; ctx.fill();
+  }
+  // HP fill: white-green when healthy, orange when hurt, red when critical
+  if (pct > 0) {
+    roundRectPath(ctx, x, y, w * pct, h, h / 2);
+    const g2 = ctx.createLinearGradient(0, y, 0, y + h);
+    if      (pct > 0.5) { g2.addColorStop(0, '#eafff2'); g2.addColorStop(1, '#7fe6a8'); }
+    else if (pct > 0.2) { g2.addColorStop(0, '#ffe08a'); g2.addColorStop(1, '#f0a93c'); }
+    else                { g2.addColorStop(0, '#ff8a7e'); g2.addColorStop(1, '#e33f3f'); }
+    ctx.fillStyle = g2; ctx.fill();
+  }
+  // Numbers, Genshin style: "87 / 100" centred on the bar
+  ctx.font = 'bold 11px ' + UI_FONT;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const label = Math.ceil(combat.playerHp) + ' / ' + PLAYER_MAX_HP;
+  ctx.strokeStyle = 'rgba(0,0,0,0.75)'; ctx.lineWidth = 3;
+  ctx.strokeText(label, x + w / 2, y + h / 2 + 0.5);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
+  ctx.restore();
+}
+
+// Red edge vignette when the player takes a hit
+function drawPlayerHitVignette() {
+  if (combat.playerHitFlash <= 0) return;
+  const a = (combat.playerHitFlash / 18) * 0.4;
+  const cx = canvas.width / 2, cy = canvas.height / 2;
+  const R = Math.hypot(cx, cy);
+  const g2 = ctx.createRadialGradient(cx, cy, R * 0.45, cx, cy, R);
+  g2.addColorStop(0, 'rgba(255,32,48,0)');
+  g2.addColorStop(1, `rgba(255,32,48,${a})`);
+  ctx.fillStyle = g2;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+// Knock-out fade: black in → respawn at the midpoint → black out
+function drawDeathOverlay() {
+  if (combat.respawnTimer <= 0) return;
+  const t = combat.respawnTimer, half = RESPAWN_FRAMES / 2;
+  const a = t > half ? (RESPAWN_FRAMES - t) / (RESPAWN_FRAMES - half) : t / half;
+  const zh = settings.language !== 'en';
+  ctx.save();
+  ctx.fillStyle = `rgba(0,0,0,${a * 0.93})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.globalAlpha = a;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#e6606a';
+  ctx.font = 'bold 26px ' + UI_FONT;
+  ctx.fillText(zh ? '你被守卫击倒了' : 'The guardian knocked you out',
+               canvas.width / 2, canvas.height / 2 - 16);
+  ctx.fillStyle = '#c8c8cc';
+  ctx.font = '13px ' + UI_FONT;
+  ctx.fillText(zh ? '正在返回出生点复活…' : 'Reviving at the spawn point…',
+               canvas.width / 2, canvas.height / 2 + 16);
+  ctx.restore();
+}
+
 // ── Berry bush system ─────────────────────────────────────────────────────────
 function generateBerryBushes() {
   berryBushes.length = 0;
@@ -2449,7 +4152,9 @@ function generateBerryBushes() {
       if (c === SHOP_COL && r === SHOP_ROW)   continue;
       if (c === STOVE_COL && r === STOVE_ROW) continue;
       if (c === STELE_COL && r === STELE_ROW) continue;
-      if (decoSet.has(`${c},${r}`))     continue;
+      if (c === CRAFT_COL && r === CRAFT_ROW) continue;
+      if (_encTiles.has(`${c},${r}`)) continue;
+      if (decoSet.has(`${c},${r}`))   continue;
       const rv = rng(c, r, 157);
       let type = null;
       if      (rv < 0.006) type = 'strawberry';
@@ -3515,6 +5220,16 @@ function update() {
   if (fishingOpen) { updateFishing(); updateCamera(); return; }
   if (cookingMinigame) updateCookingMinigame();
 
+  updateCombat();
+
+  // Knocked out — freeze the player while the death fade plays
+  if (combat.respawnTimer > 0) {
+    combat.respawnTimer--;
+    if (combat.respawnTimer === Math.floor(RESPAWN_FRAMES / 2)) doRespawn();
+    updateCamera();
+    return;
+  }
+
   // Refresh reachable interactions and keep the selection cursor in range
   interactions = buildInteractions();
   if (selIndex >= interactions.length) selIndex = Math.max(0, interactions.length - 1);
@@ -3632,6 +5347,38 @@ function update() {
     }
   }
 
+  // ── Washington Monument heal (Statue-of-Seven style) ─────────────────────
+  // Stand still within 3.5 tiles of the monument base for 1.5 s → full HP
+  const MON_HEAL_R    = 3.5;   // tile radius
+  const MON_HEAL_TIME = 90;    // frames (1.5 s @ 60 fps)
+  const monDist = Math.hypot(player.px + 16 - MON_CENTER_X,
+                             player.py + 16 - MON_BASE_BOTTOM);
+  const monNear = monDist <= MON_HEAL_R * TILE;
+  if (combat.playerHp >= PLAYER_MAX_HP) monumentHeal.healed = false;
+  if (monNear && !player.moving && movePath.length === 0 && combat.respawnTimer <= 0) {
+    if (combat.playerHp < PLAYER_MAX_HP && !monumentHeal.healed) {
+      monumentHeal.stillTimer++;
+      if (monumentHeal.stillTimer >= MON_HEAL_TIME) {
+        // Heal to full
+        combat.playerHp      = PLAYER_MAX_HP;
+        combat.playerGhostHp = PLAYER_MAX_HP;
+        monumentHeal.healed  = true;
+        monumentHeal.stillTimer = 0;
+        monumentHeal.glowTimer  = 120; // ~2 s rising green light on the monument
+        const hx = player.px + 16, hy = player.py;
+        _spawnCombatParticles(hx, hy + 16, 30,
+          ['#60ffaa', '#a0ffcc', '#ffffff', '#ffd84d'], 4.5, -0.09, false);
+        combat.floatTexts.push({ x: hx, y: hy - 8,
+          text: settings.language !== 'en' ? '+满血' : '+FULL HP',
+          color: '#60ff90', life: 1.4 });
+        showNotif(settings.language !== 'en' ? '❤️ HP已全部恢复' : '❤️ HP fully restored');
+      }
+    }
+  } else {
+    monumentHeal.stillTimer = 0;
+  }
+  if (monumentHeal.glowTimer > 0) monumentHeal.glowTimer--;
+
   updateCamera();
 }
 
@@ -3684,7 +5431,14 @@ function drawHUD() {
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.save();
-  ctx.translate(-Math.round(camX), -Math.round(camY));
+  // Ultimate-attack screen shake
+  let shakeX = 0, shakeY = 0;
+  if (combat.screenShake > 0) {
+    const m = Math.min(8, combat.screenShake * 0.6);
+    shakeX = (Math.random() * 2 - 1) * m;
+    shakeY = (Math.random() * 2 - 1) * m;
+  }
+  ctx.translate(-Math.round(camX) + shakeX, -Math.round(camY) + shakeY);
 
   const sx = Math.round(camX), sy = Math.round(camY);
   const sw = canvas.width,     sh = canvas.height;
@@ -3738,6 +5492,9 @@ function draw() {
     drawChestByType(ch.type, x, y, ch.open);
     ctx.restore();
   }
+
+  // ── Sealed chest + guardian zombie ────────────────────────────────────────
+  drawCombatScene();
 
   // ── Dig spots ─────────────────────────────────────────────────────────────
   for (const ds of digSpots) {
@@ -3795,6 +5552,7 @@ function draw() {
   // ── Tree + monument overlay (on top of player) ────────────────────────────
   ctx.drawImage(treeCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
   drawStele(ctx); // always draw stele fresh each frame so it can't be buried by map data
+  drawCombatFX(ctx); // attack swing / ult beam / hit particles on top of trees
 
   // ── Occlusion ghost (gray silhouette shown through trees) ────────────────
   const PAD = 12;
@@ -3882,11 +5640,132 @@ function draw() {
   ctx.restore();
 
   drawHUD();
+  drawEnergyBar();
+  drawPlayerHpBar();
+  drawChestCompass();
   drawInteractionBar();
   drawBerryHints();
   drawFishingHints();
   if (fishingOpen) drawFishingUI();
   if (cookingMinigame) drawCookingMinigame();
+  drawPlayerHitVignette();
+  drawDeathOverlay();
+  drawMonumentHealAura();
+}
+
+// Monument heal: permanent soft base shimmer + holy pillar of light after a heal
+function drawMonumentHealAura() {
+  if (combat.respawnTimer > 0) return;
+
+  const bx    = MON_CENTER_X - camX;
+  const by    = MON_BASE_BOTTOM - camY;
+  const pulse = 0.5 + 0.5 * Math.sin(tick * 0.055);
+
+  ctx.save();
+
+  // ── Always-on soft ground shimmer ────────────────────────────────────────────
+  const shimmerA = 0.05 + pulse * 0.04;
+  const shimmerG = ctx.createRadialGradient(bx, by, 0, bx, by, 60);
+  shimmerG.addColorStop(0, `rgba(180,240,200,${shimmerA})`);
+  shimmerG.addColorStop(1, 'rgba(180,240,200,0)');
+  ctx.fillStyle = shimmerG;
+  ctx.beginPath();
+  ctx.ellipse(bx, by, 60, 22, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ── Post-heal holy pillar ────────────────────────────────────────────────────
+  if (monumentHeal.glowTimer > 0) {
+    const frac  = monumentHeal.glowTimer / 120;   // 1 → 0
+    const ease  = frac * frac * (3 - 2 * frac);   // smooth-step
+
+    // Ground bloom — wide golden-white oval
+    const bR = 110 + (1 - frac) * 20;
+    const boom = ctx.createRadialGradient(bx, by, 0, bx, by, bR);
+    boom.addColorStop(0,   `rgba(255,255,220,${0.65 * ease})`);
+    boom.addColorStop(0.3, `rgba(200,255,230,${0.45 * ease})`);
+    boom.addColorStop(0.7, `rgba(130,220,180,${0.20 * ease})`);
+    boom.addColorStop(1,   'rgba(80,200,160,0)');
+    ctx.fillStyle = boom;
+    ctx.beginPath();
+    ctx.ellipse(bx, by, bR, bR * 0.35, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Main pillar — tapers to top
+    const pillarTop = by - 380 * ease;
+    const wBase = 38, wTop = 6;
+    const pillarGr = ctx.createLinearGradient(bx, by, bx, pillarTop);
+    pillarGr.addColorStop(0,    `rgba(255,255,230,${0.80 * ease})`);
+    pillarGr.addColorStop(0.25, `rgba(220,255,240,${0.60 * ease})`);
+    pillarGr.addColorStop(0.6,  `rgba(180,230,210,${0.35 * ease})`);
+    pillarGr.addColorStop(1,    'rgba(160,220,200,0)');
+    ctx.beginPath();
+    ctx.moveTo(bx - wBase / 2, by);
+    ctx.lineTo(bx - wTop  / 2, pillarTop);
+    ctx.lineTo(bx + wTop  / 2, pillarTop);
+    ctx.lineTo(bx + wBase / 2, by);
+    ctx.closePath();
+    ctx.fillStyle = pillarGr;
+    ctx.fill();
+
+    // Bright white core streak
+    const coreGr = ctx.createLinearGradient(bx, by, bx, pillarTop);
+    coreGr.addColorStop(0,   `rgba(255,255,255,${0.95 * ease})`);
+    coreGr.addColorStop(0.4, `rgba(255,255,255,${0.55 * ease})`);
+    coreGr.addColorStop(1,   'rgba(255,255,255,0)');
+    ctx.fillStyle = coreGr;
+    ctx.fillRect(bx - 3, pillarTop, 6, by - pillarTop);
+
+    // 4 divine cross-rays rotating slowly at the peak
+    const rayLen  = 40 + 20 * pulse;
+    const rayA    = (tick * 0.8) * Math.PI / 180;
+    ctx.save();
+    ctx.globalAlpha = 0.55 * ease;
+    ctx.strokeStyle = '#fffde0';
+    ctx.lineWidth   = 2;
+    ctx.shadowColor = '#fff8c0';
+    ctx.shadowBlur  = 12;
+    ctx.lineCap     = 'round';
+    for (let i = 0; i < 4; i++) {
+      const a = rayA + (i / 4) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(bx, pillarTop);
+      ctx.lineTo(bx + Math.cos(a) * rayLen, pillarTop + Math.sin(a) * rayLen * 0.4);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Ascending light orbs
+    const orbCount = 6;
+    ctx.save();
+    ctx.globalAlpha = 0.7 * ease;
+    for (let i = 0; i < orbCount; i++) {
+      const phase  = ((tick * 0.7 + i * 47) % 120) / 120;
+      const ox     = bx + Math.sin(i * 2.1 + tick * 0.03) * 16;
+      const oy     = by - phase * (by - pillarTop);
+      const radius = 3.5 * (1 - phase * 0.5);
+      const orbG   = ctx.createRadialGradient(ox, oy, 0, ox, oy, radius * 2.5);
+      orbG.addColorStop(0, 'rgba(255,255,230,0.9)');
+      orbG.addColorStop(1, 'rgba(200,255,220,0)');
+      ctx.fillStyle = orbG;
+      ctx.beginPath();
+      ctx.arc(ox, oy, radius * 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Halo ring at peak
+    const haloR = 18 + 6 * pulse;
+    const haloG = ctx.createRadialGradient(bx, pillarTop, 0, bx, pillarTop, haloR);
+    haloG.addColorStop(0,   `rgba(255,255,210,${0.6 * ease})`);
+    haloG.addColorStop(0.5, `rgba(255,245,180,${0.25 * ease})`);
+    haloG.addColorStop(1,   'rgba(255,245,180,0)');
+    ctx.fillStyle = haloG;
+    ctx.beginPath();
+    ctx.ellipse(bx, pillarTop, haloR, haloR * 0.45, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
 }
 
 // ── Interaction selection bar (screen space, above the player) ────────────────
@@ -3951,8 +5830,12 @@ function drawInteractionBar() {
 
 // ── Game loop ─────────────────────────────────────────────────────────────────
 function loop() {
-  update();
-  draw();
+  try {
+    update();
+    draw();
+  } catch (err) {
+    console.error('[game loop error]', err);
+  }
   requestAnimationFrame(loop);
 }
 
@@ -4504,6 +6387,81 @@ function closeCookUI() {
 cookCloseBtn.addEventListener('click', closeCookUI);
 cookModal.addEventListener('click', e => { if (e.target === cookModal) closeCookUI(); });
 
+// ── Crafting UI ───────────────────────────────────────────────────────────────
+const craftModal    = document.getElementById('craftModal');
+const craftCloseBtn = document.getElementById('craftCloseBtn');
+const craftListEl   = document.getElementById('craftRecipeList');
+const craftTitleEl  = document.getElementById('craftTitle');
+
+function canCraft(recipe) {
+  return Object.entries(recipe.needs).every(([k, n]) => (inventory[k] || 0) >= n);
+}
+
+function openCraftUI() {
+  craftTitleEl.textContent  = t('craftTitle');
+  craftCloseBtn.textContent = t('craftClose');
+  craftListEl.innerHTML = '';
+
+  const sorted = [...CRAFT_RECIPES].sort((a, b) => (canCraft(b) ? 1 : 0) - (canCraft(a) ? 1 : 0));
+  sorted.forEach(recipe => {
+    const row = document.createElement('div');
+    row.className = 'recipe-row';
+
+    // Header
+    const hdr    = document.createElement('div');  hdr.className = 'rr-header';
+    const iconEl = document.createElement('span'); iconEl.className = 'rr-icon'; iconEl.textContent = recipe.icon;
+    const nameEl = document.createElement('span'); nameEl.className = 'rr-name'; nameEl.textContent = t(recipe.key) || recipe.key;
+    const acts   = document.createElement('div');  acts.className = 'rr-acts';
+    const btn    = document.createElement('button'); btn.className = 'rr-cook'; btn.textContent = t('craft');
+
+    hdr.append(iconEl, nameEl, acts);
+    acts.appendChild(btn);
+
+    // Ingredient chips
+    const chips = document.createElement('div'); chips.className = 'rr-needs';
+    Object.entries(recipe.needs).forEach(([k, n]) => {
+      const have = (inventory[k] || 0) >= n;
+      const meta = INVENTORY_META.find(m => m.key === k);
+      const chip = document.createElement('span');
+      chip.className = 'rr-chip ' + (have ? 'ok' : 'bad');
+      chip.textContent = `${meta ? meta.icon : '?'} ${t(k) || k} ×${n}  (${Math.min(inventory[k] || 0, n)}/${n})`;
+      chips.appendChild(chip);
+    });
+
+    const refresh = () => {
+      const ok = canCraft(recipe);
+      btn.disabled = !ok;
+      chips.querySelectorAll('.rr-chip').forEach((chip, i) => {
+        const [k, n] = Object.entries(recipe.needs)[i];
+        chip.className = 'rr-chip ' + ((inventory[k] || 0) >= n ? 'ok' : 'bad');
+      });
+    };
+    refresh();
+
+    btn.addEventListener('click', () => {
+      if (!canCraft(recipe)) { showNotif(t('craftMissing')); return; }
+      Object.entries(recipe.needs).forEach(([k, n]) => { inventory[k] -= n; });
+      inventory[recipe.out] = (inventory[recipe.out] || 0) + 1;
+      saveInventory();
+      showNotif(t('craftDone', recipe.icon, t(recipe.key) || recipe.key));
+      refresh();
+    });
+
+    row.append(hdr, chips);
+    craftListEl.appendChild(row);
+  });
+
+  craftModal.classList.remove('hidden');
+}
+
+function closeCraftUI() {
+  craftOpen = false;
+  craftModal.classList.add('hidden');
+}
+
+craftCloseBtn.addEventListener('click', closeCraftUI);
+craftModal.addEventListener('click', e => { if (e.target === craftModal) closeCraftUI(); });
+
 // ── Achievement modal UI ──────────────────────────────────────────────────────
 const achBtn      = document.getElementById('achBtn');
 const achModal    = document.getElementById('achModal');
@@ -4618,12 +6576,14 @@ function openBagUI() {
   document.getElementById('bagFishTitle').textContent= t('bagFish');
   document.getElementById('bagIngTitle').textContent = t('bagIngredients');
   document.getElementById('bagFoodTitle').textContent= t('bagFood');
-  document.getElementById('bagMatTitle').textContent = t('bagMaterials');
+  document.getElementById('bagMatTitle').textContent    = t('bagMaterials');
+  document.getElementById('bagCombatTitle').textContent = t('bagCombat');
   bagCloseBtn.textContent = t('close');
-  buildBagSection(document.getElementById('bagFishGrid'), BAG_FISH_KEYS);
-  buildBagSection(document.getElementById('bagIngGrid'),  BAG_INGREDIENT_KEYS);
-  buildBagSection(document.getElementById('bagFoodGrid'), BAG_FOOD_KEYS);
-  buildBagSection(document.getElementById('bagMatGrid'),  BAG_MATERIAL_KEYS);
+  buildBagSection(document.getElementById('bagFishGrid'),   BAG_FISH_KEYS);
+  buildBagSection(document.getElementById('bagIngGrid'),    BAG_INGREDIENT_KEYS);
+  buildBagSection(document.getElementById('bagFoodGrid'),   BAG_FOOD_KEYS);
+  buildBagSection(document.getElementById('bagMatGrid'),    BAG_MATERIAL_KEYS);
+  buildBagSection(document.getElementById('bagCombatGrid'), BAG_COMBAT_KEYS);
   bagModal.classList.remove('hidden');
 }
 function closeBagUI() { bagOpen = false; bagModal.classList.add('hidden'); }
@@ -4784,6 +6744,7 @@ function applyCanonical(canon) {
     BUILDING_TILES.add(`${STELE_COL},${STELE_ROW}`);
   }
   map[STELE_ROW][STELE_COL] = T.GRASS; // stele tile must always be walkable grass
+  clearCombatTiles();                  // sealed chest + zombie must sit on open ground
   decorations.length = 0;
   for (const d of (canon.decos || [])) {
     if ((d.type === 'flower' || d.type === 'sunflower') && rng(d.col, d.row, 919) >= 0.6) continue;

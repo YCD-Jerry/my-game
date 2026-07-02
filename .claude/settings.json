@@ -8,7 +8,13 @@
       "Bash(xargs wc -l)",
       "Bash(git add *)",
       "Bash(git commit -m 'Add stele, fishing system overhaul, cooking minigame, backpack discard, chest persistence, berry/fishing achievements, 5 fish types, reset progress *)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "PowerShell(node --check \"c:\\\\Users\\\\ycd_1\\\\Desktop\\\\my-game\\\\game.js\")",
+      "Bash(node --check \"c:/Users/ycd_1/Desktop/my-game/game.js\")",
+      "Bash(node --check \"c:\\\\Users\\\\ycd_1\\\\Desktop\\\\my-game\\\\game.js\")",
+      "PowerShell(git diff index.html; node --check game.js; echo \"syntax check exit: $LASTEXITCODE\")",
+      "PowerShell(git diff game.js | Select-String -Pattern '^@@' | ForEach-Object { $_.Line })",
+      "PowerShell(node --check \"c:\\\\Users\\\\ycd_1\\\\Desktop\\\\my-game\\\\game.js\"; echo \"exit: $LASTEXITCODE\")"
     ]
   }
 }
